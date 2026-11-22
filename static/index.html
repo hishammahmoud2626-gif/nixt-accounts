@@ -165,6 +165,7 @@
   <button data-tab="settings" class="active" onclick="showTab('settings')">الإعدادات</button>
   <button data-tab="defs" onclick="showTab('defs')">التعريفات</button>
   <button data-tab="import" class="admin-only" onclick="showTab('import')">الاستيراد</button>
+  <button data-tab="sync" class="admin-only" onclick="showTab('sync')">المزامنة</button>
 </div>
 <main class="hidden" id="app-main">
   <!-- inventory (coming soon) -->
@@ -543,6 +544,37 @@
     </div>
   </section>
 
+  <!-- sync (admin) -->
+  <section id="tab-sync" class="hidden">
+    <div class="panel">
+      <h2>المزامنة بين الأجهزة <span class="sub">شغل البيت وشغل المحل على نفس البيانات</span></h2>
+      <p class="muted">المزامنة بتشتغل عن طريق برنامج <b>Google Drive for Desktop</b> على الجهازين: النظام بيحط نسخة من البيانات في فولدر جوجل درايف عندك، والجهاز التاني بيسحبها. مفيش أي بيانات بتطلع لأي حد تاني، ومفيش إنشاء حسابات جديدة.</p>
+      <p class="muted" style="background:#fef9c3;border-radius:8px;padding:6px 10px">مهم: نسخة المزامنة خاصة بيك على حساب جوجل درايف بتاعك، لكنها <b>مش مشفرة</b> - أي حد يوصل لحساب درايف بتاعك يقدر يقراها. ماتشاركش حسابك مع حد.</p>
+      <h2>خطوات التجهيز (مرة واحدة على كل جهاز)</h2>
+      <ol class="muted" style="line-height:1.9">
+        <li>نزّل وثبّت برنامج Google Drive for Desktop من google.com/drive/download وسجّل دخولك بنفس حساب جوجل على الجهازين.</li>
+        <li>افتح صفحة المزامنة دي على كل جهاز - النظام بيلاقي فولدر درايف لوحده في معظم الحالات.</li>
+        <li>سمّي كل جهاز اسم مختلف (مثال: كمبيوتر المحل / لابتوب البيت) واحفظ.</li>
+        <li>من الجهاز الأساسي دوس "رفع نسخة الآن"، ومن الجهاز التاني دوس "سحب آخر نسخة".</li>
+      </ol>
+      <div class="row">
+        <div class="field"><label>اسم الجهاز ده</label><input id="sy-device" style="width:180px" placeholder="مثال: كمبيوتر المحل"></div>
+        <div class="field"><label>فولدر المزامنة (اتركه فاضي للاكتشاف التلقائي)</label><input id="sy-dir" style="width:320px" placeholder="مثال: G:\My Drive\NixtSync"></div>
+        <button onclick="saveSyncSettings()">حفظ</button>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>حالة المزامنة</h2>
+      <div id="sy-status" class="cards"></div>
+      <div class="row" style="margin-top:10px">
+        <button onclick="doPush()">رفع نسخة الآن</button>
+        <button class="ghost" onclick="doPull()">سحب آخر نسخة</button>
+        <button class="ghost" onclick="loadSync()">تحديث الحالة</button>
+      </div>
+      <div id="sy-remote" class="muted" style="margin-top:8px"></div>
+    </div>
+  </section>
+
   <!-- import (admin) -->
   <section id="tab-import" class="hidden">
     <div class="panel">
@@ -767,7 +799,7 @@ async function doLogout(){
 }
 
 /* ---------- nav ---------- */
-const TAB_SEC = {dash:'accounts',accounts:'accounts',invoice:'accounts',sales:'accounts',purchases:'accounts',payments:'accounts',statement:'accounts',treasury:'accounts',cheques:'accounts',profit:'accounts',inventory:'inventory',production:'production',settings:'settings',import:'settings',defs:'settings'};
+const TAB_SEC = {dash:'accounts',accounts:'accounts',invoice:'accounts',sales:'accounts',purchases:'accounts',payments:'accounts',statement:'accounts',treasury:'accounts',cheques:'accounts',profit:'accounts',inventory:'inventory',production:'production',settings:'settings',import:'settings',defs:'settings',sync:'settings'};
 const INV_TITLES = {materials:'المخزن - الخامات',soles:'المخزن - النعال',leather:'المخزن - الجلد (باكو)',ready:'المخزن - المخزون الجاهز',orders:'الإنتاج - أوامر الإنتاج',models:'الإنتاج - الموديلات'};
 function showSection(sec){
   showTab(sec==='settings'?'settings':sec==='inventory'?'inventory':sec==='production'?'production':'dash');
@@ -803,6 +835,7 @@ function showTab(t, kind){
   }
   if(t==='settings') loadSettings();
   if(t==='defs') loadEmployees();
+  if(t==='sync') loadSync();
 }
 function setPartyKind(k){
   partyKind=k;
@@ -1326,6 +1359,50 @@ async function wipeData(){
     refreshCustomers();
   }catch(e){ out.textContent='فشل: '+e.message; }
 }
+/* ---------- sync ---------- */
+const SYNC_STATES={not_configured:'الفولدر مش متظبط لسه',dir_missing:'فولدر درايف مش موجود على الجهاز ده',local_only:'أول مرة - مفيش نسخة مرفوعة لسه',up_to_date:'البيانات محدثة على الجهازين',local_newer:'الجهاز ده فيه بيانات أحدث - ارفع نسخة',remote_newer:'فيه نسخة أحدث على جهاز تاني - اسحبها',conflict:'الجهازين اتعدلوا من آخر مزامنة - راجع قبل السحب'};
+async function loadSync(){
+  try{
+    const r=await api('/api/sync/status');
+    document.getElementById('sy-device').value=r.device||'';
+    const st=await api('/api/settings');
+    document.getElementById('sy-dir').value=st.sync_dir||'';
+    const scolor = r.state==='up_to_date'?'#dcfce7':(r.state==='conflict'?'#fee2e2':'#e0f2fe');
+    document.getElementById('sy-status').innerHTML=
+      `<div class="card" style="background:${scolor}"><div class="t">الحالة</div><div style="font-weight:700;margin-top:4px">${SYNC_STATES[r.state]||r.state}</div></div>`+
+      `<div class="card"><div class="t">فولدر المزامنة</div><div class="num" style="font-size:13px;direction:ltr">${esc(r.sync_dir||'- مش محدد -')}</div></div>`+
+      `<div class="card"><div class="t">آخر مزامنة</div><div class="v num" style="font-size:15px">${esc(r.last_sync||'لسه')}</div></div>`;
+    document.getElementById('sy-remote').innerHTML = r.remote
+      ? `آخر نسخة مرفوعة: من جهاز <b>${esc(r.remote.device||'')}</b> - <span class="num">${esc(r.remote.ts||'')}</span> - حجم ${(r.remote.size/1048576).toFixed(1)} ميجا - إصدار ${esc(r.remote.app_version||'')}`
+      : 'مفيش نسخة مرفوعة لسه في الفولدر.';
+  }catch(e){toast(e.message,true);}
+}
+async function saveSyncSettings(){
+  try{
+    await api('/api/settings',{method:'POST',body:JSON.stringify({device_name:v('sy-device'),sync_dir:v('sy-dir')})});
+    toast('تم الحفظ'); loadSync();
+  }catch(e){toast(e.message,true);}
+}
+async function doPush(){
+  try{
+    const r=await api('/api/sync/push',{method:'POST',body:'{}'});
+    toast('اترفعت نسخة - جوجل درايف هيرفعها للسحابة في الخلفية');
+    loadSync();
+  }catch(e){toast(e.message,true);}
+}
+async function doPull(){
+  const st=await api('/api/sync/status');
+  let msg='السحب هيستبدل بيانات الجهاز ده بآخر نسخة مرفوعة.';
+  if(st.state==='conflict') msg='تنبيه: الجهاز ده اتعدل من آخر مزامنة! السحب هيستبدل تعديلاته بالنسخة المرفوعة. (النظام بياخد نسخة احتياطية محلية قبل الاستبدال). متأكد؟';
+  else msg+=' (بياخد نسخة احتياطية محلية الأول). متأكد؟';
+  if(!confirm(msg)) return;
+  try{
+    await api('/api/sync/pull',{method:'POST',body:'{}'});
+    toast('تم السحب - النظام هيعيد التشغيل بالبيانات الجديدة');
+    setTimeout(()=>location.reload(),1500);
+  }catch(e){toast(e.message,true);}
+}
+
 /* ---------- sales / purchases movements & returns ---------- */
 let allInvoices=[];
 function newInvoiceFromSection(kind){
