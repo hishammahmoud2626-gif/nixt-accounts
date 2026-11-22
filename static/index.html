@@ -152,6 +152,11 @@
   <button class="ghost" onclick="openUpdate()">🔄 تحديث</button>
   <button class="ghost" onclick="doLogout()">🚪 خروج</button>
 </header>
+<div id="lock-banner" class="hidden" style="background:#fef2f2;border-bottom:1px solid #fca5a5;color:#991b1b;padding:10px 16px;text-align:center;font-weight:700">
+  🔒 البرنامج مفتوح على جهاز تاني: <span id="lock-dev"></span>. التعديلات هنا مقفولة عشان البيانات ماتتخبطش - اقفل البرنامج هناك الأول وبعدين دوس تحديث.
+  <button class="ghost" style="margin-inline-start:8px" onclick="refreshLock()">تحديث</button>
+  <button class="ghost admin-only" style="margin-inline-start:4px" onclick="forceLock()">الجهاز التاني مقفول بالفعل - افتح هنا</button>
+</div>
 <div class="subnav hidden" id="subnav-accounts">
   <button data-tab="dash" class="active" onclick="showTab('dash')">🏠 الرئيسية</button>
   <button data-tab="accounts" data-kind="customer" onclick="showTab('accounts','customer')">👥 العملاء</button>
@@ -738,8 +743,9 @@
         <li>نزّل وثبّت برنامج Google Drive for Desktop من google.com/drive/download وسجّل دخولك بنفس حساب جوجل على الجهازين.</li>
         <li>افتح صفحة المزامنة دي على كل جهاز - النظام بيلاقي فولدر درايف لوحده في معظم الحالات.</li>
         <li>سمّي كل جهاز اسم مختلف (مثال: كمبيوتر المحل / لابتوب البيت) واحفظ.</li>
-        <li>من الجهاز الأساسي دوس "رفع نسخة الآن"، ومن الجهاز التاني دوس "سحب آخر نسخة".</li>
+        <li>من الجهاز الأساسي دوس "رفع نسخة الآن"، ومن الجهاز التاني دوس "سحب ودمج آخر نسخة".</li>
       </ol>
+      <p class="muted" style="background:#ecfdf5;border-radius:8px;padding:6px 10px">من إصدار 1.8.0: أول جهاز يفتح البرنامج بياخد القفل وبيكون هو اللي بيعدّل، والجهاز التاني بيتحذّر وبيستنى لحد ما الأول يقفل. عند الفتح البرنامج بيسحب تعديلات الجهاز التاني لوحده، وعند القفل بيرفع نسخة لوحده. الدمج دلوقتي على مستوى السجل: كل سجل ليه وقت تعديل، والأحدث بيكسب - مفيش بيانات بتضيع.</p>
       <div class="row">
         <div class="field"><label>اسم الجهاز ده</label><input id="sy-device" style="width:180px" placeholder="مثال: كمبيوتر المحل"></div>
         <div class="field"><label>فولدر المزامنة (اتركه فاضي للاكتشاف التلقائي)</label><input id="sy-dir" style="width:320px" placeholder="مثال: G:\My Drive\NixtSync"></div>
@@ -751,7 +757,7 @@
       <div id="sy-status" class="cards"></div>
       <div class="row" style="margin-top:10px">
         <button onclick="doPush()">رفع نسخة الآن</button>
-        <button class="ghost" onclick="doPull()">سحب آخر نسخة</button>
+        <button class="ghost" onclick="doPull()">سحب ودمج آخر نسخة</button>
         <button class="ghost" onclick="loadSync()">تحديث الحالة</button>
       </div>
       <div id="sy-remote" class="muted" style="margin-top:8px"></div>
@@ -945,6 +951,11 @@ function toast(msg, bad){
 }
 async function api(path, opts){
   const r = await fetch(path, opts);
+  if(r.status===423){
+    let j={}; try{ j=await r.clone().json(); }catch(_){}
+    showLockBanner(j.locked_by||'', j.locked_ts||'');
+    throw new Error('البرنامج مفتوح على جهاز تاني ('+(j.locked_by||'')+') - التعديلات مقفولة هنا');
+  }
   if(r.status===401){
     let msg='login';
     try{ const j=await r.clone().json(); if(j && j.error) msg=j.error; }catch(_){}
@@ -986,10 +997,33 @@ function showApp(){
   }
   document.getElementById('who').textContent = currentUser.username + ' ('+roleLabel(role)+')';
 }
+function showLockBanner(dev, ts){
+  document.getElementById('lock-dev').textContent = dev + (ts ? ' (من '+ts+')' : '');
+  document.getElementById('lock-banner').classList.remove('hidden');
+}
+function hideLockBanner(){
+  document.getElementById('lock-banner').classList.add('hidden');
+}
+async function refreshLock(){
+  try{
+    const me = await api('/api/me');
+    if(me.locked_by){ showLockBanner(me.locked_by, me.locked_ts); toast('لسه مفتوح على '+me.locked_by, true); }
+    else { hideLockBanner(); toast('اتفتح - الجهاز ده بقى هو النشط'); }
+  }catch(e){toast(e.message,true);}
+}
+async function forceLock(){
+  if(!confirm('استخدم ده لو بس متأكد إن البرنامج مقفول على الجهاز التاني. لو مفتوح هناك فعلاً، التعديلات ممكن تتلخبط. متأكد؟')) return;
+  try{
+    await api('/api/sync/force-lock',{method:'POST',body:'{}'});
+    hideLockBanner();
+    toast('اتفتح على الجهاز ده');
+  }catch(e){toast(e.message,true);}
+}
 async function bootAuth(){
   const me = await api('/api/me');
   document.getElementById('app-ver').textContent='إصدار '+me.version;
   document.getElementById('login-ver').textContent='إصدار '+me.version;
+  if(me.locked_by){ showLockBanner(me.locked_by, me.locked_ts); } else { hideLockBanner(); }
   if(me.needs_setup){
     document.getElementById('setup-form').classList.remove('hidden');
     return;
@@ -1783,8 +1817,11 @@ async function loadSync(){
     const st=await api('/api/settings');
     document.getElementById('sy-dir').value=st.sync_dir||'';
     const scolor = r.state==='up_to_date'?'#dcfce7':(r.state==='conflict'?'#fee2e2':'#e0f2fe');
+    const lockTxt = r.locked_by ? ('مقفول - مفتوح على '+r.locked_by) : (r.own_lock ? 'الجهاز ده هو النشط' : ((r.lock&&r.lock.device)?('آخر قفل: '+r.lock.device) : 'مفيش قفل'));
+    const lockColor = r.locked_by ? '#fee2e2' : '#dcfce7';
     document.getElementById('sy-status').innerHTML=
       `<div class="card" style="background:${scolor}"><div class="t">الحالة</div><div style="font-weight:700;margin-top:4px">${SYNC_STATES[r.state]||r.state}</div></div>`+
+      `<div class="card" style="background:${lockColor}"><div class="t">قفل الأجهزة</div><div style="font-weight:700;margin-top:4px">${esc(lockTxt)}</div></div>`+
       `<div class="card"><div class="t">فولدر المزامنة</div><div class="num" style="font-size:13px;direction:ltr">${esc(r.sync_dir||'- مش محدد -')}</div></div>`+
       `<div class="card"><div class="t">آخر مزامنة</div><div class="v num" style="font-size:15px">${esc(r.last_sync||'لسه')}</div></div>`+
       `<div class="card"><div class="t">مكان البيانات على الجهاز ده</div><div class="num" style="font-size:12px;direction:ltr;margin-top:4px">${esc(r.data_dir||'')}</div></div>`;
@@ -1808,15 +1845,13 @@ async function doPush(){
   }catch(e){toast(e.message,true);}
 }
 async function doPull(){
-  const st=await api('/api/sync/status');
-  let msg='السحب هيستبدل بيانات الجهاز ده بآخر نسخة مرفوعة.';
-  if(st.state==='conflict') msg='تنبيه: الجهاز ده اتعدل من آخر مزامنة! السحب هيستبدل تعديلاته بالنسخة المرفوعة. (النظام بياخد نسخة احتياطية محلية قبل الاستبدال). متأكد؟';
-  else msg+=' (بياخد نسخة احتياطية محلية الأول). متأكد؟';
+  let msg='السحب هيدمج آخر نسخة مرفوعة مع بيانات الجهاز ده على مستوى السجل: الأحدث بيكسب والمحذوف بيفضل محذوف، ومفيش بيانات بتضيع. النظام بياخد نسخة احتياطية لوحده قبل الدمج. متأكد؟';
   if(!confirm(msg)) return;
   try{
-    await api('/api/sync/pull',{method:'POST',body:'{}'});
-    toast('تم السحب - النظام هيعيد التشغيل بالبيانات الجديدة');
-    setTimeout(()=>location.reload(),1500);
+    const r=await api('/api/sync/pull',{method:'POST',body:'{}'});
+    const m=(r.meta&&r.meta.merge)||{};
+    toast('تم الدمج: '+(m.inserted||0)+' سجل جديد، '+(m.updated||0)+' تحديث، '+(m.deleted||0)+' حذف');
+    setTimeout(()=>location.reload(),2000);
   }catch(e){toast(e.message,true);}
 }
 
