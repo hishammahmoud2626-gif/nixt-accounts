@@ -163,6 +163,7 @@
   <button data-tab="cheques" onclick="showTab('cheques')">🖋️ الشيكات</button>
   <button data-tab="profit" class="admin-only" onclick="showTab('profit')">📈 الأرباح</button>
   <button data-tab="collections" onclick="showTab('collections')">📞 التحصيل</button>
+  <button data-tab="quotes" onclick="showTab('quotes')">💰 عروض الأسعار</button>
   <button data-tab="reports" class="admin-only" onclick="showTab('reports')">📊 التقارير</button>
 </div>
 <div class="subnav hidden" id="subnav-inventory">
@@ -210,7 +211,7 @@
     </div>
     <div class="panel">
       <h2>الأصناف <span class="sub">سعر الجملة بيتحسب تلقائيًا في الفاتورة: سعر المستهلك ÷ القاسم، وبعدين ينقص خصم العميل</span></h2>
-      <table id="items-table"><thead><tr><th>الصنف / الموديل</th><th>الكود</th><th>سعر المستهلك</th><th>سعر الجملة قبل الخصم</th><th></th></tr></thead><tbody></tbody></table>
+      <table id="items-table"><thead><tr><th>الصنف / الموديل</th><th>الكود</th><th>سعر المستهلك</th><th>سعر الجملة قبل الخصم</th><th>التكلفة</th><th></th></tr></thead><tbody></tbody></table>
     </div>
     <div class="panel">
       <h2>الموظفون</h2>
@@ -220,6 +221,10 @@
   </section>
   <!-- dashboard -->
   <section id="tab-dash">
+    <div class="panel" id="today-panel">
+      <h2>اليوم <span class="sub" id="today-date"></span></h2>
+      <div id="today-body" class="muted">...</div>
+    </div>
     <div class="cards" id="dash-cards"></div>
     <div class="panel warn2" id="dash-alerts-panel">
       <h2>تنبيهات</h2>
@@ -329,6 +334,18 @@
           <table id="tp-colors"><thead><tr><th>اللون</th><th>أزواج</th><th>إجمالي</th></tr></thead><tbody></tbody></table>
         </div>
       </div>
+    </div>
+    <div class="panel">
+      <h2>ربح الموديلات <span class="sub">سعر البيع ناقص التكلفة - التكلفة بتتسجل في تعريف الصنف</span></h2>
+      <div class="row">
+        <div class="field"><label>من</label><input id="mp-from" type="date"></div>
+        <div class="field"><label>إلى</label><input id="mp-to" type="date"></div>
+        <button onclick="loadModelProfit()">عرض</button>
+      </div>
+      <div id="mp-summary" style="margin:6px 0"></div>
+      <table id="mp-table" style="width:100%"><thead><tr>
+        <th>الصنف</th><th>أزواج</th><th>إيراد البيع</th><th>تكلفة الزوج</th><th>الربح</th><th>هامش %</th>
+      </tr></thead><tbody></tbody></table>
     </div>
     <div class="panel">
       <h2>تقفيل الشهر <span class="sub">تقرير الشهر + قفله عشان محدش يسجل فيه بعد التقفيل</span></h2>
@@ -514,6 +531,7 @@
         <div class="field"><label>الصنف / الموديل *</label><input id="it-name" style="width:180px" placeholder="مثال: 999"></div>
         <div class="field"><label>الكود</label><input id="it-code" class="num" style="width:90px"></div>
         <div class="field"><label>سعر المستهلك *</label><input id="it-retail" type="number" min="0" step="0.01" class="num" style="width:120px"></div>
+        <div class="field"><label>تكلفة الزوج</label><input id="it-cost" type="number" min="0" step="0.01" class="num" style="width:110px"></div>
       </div>
       <p class="muted">سعر الجملة = سعر المستهلك ÷ <span id="it-div" class="num">1.22</span> (القاسم من الإعدادات)، وخصم العميل بينقص جوه الفاتورة.</p>
       <div class="row" style="margin-top:10px">
@@ -658,6 +676,9 @@
         </select></div>
       </div>
       <div class="cards" id="ch-totals"></div>
+      <h2 style="font-size:15px;margin-top:10px">الشيكات القادمة (30 يوم)</h2>
+      <div id="ch-upcoming" class="muted">...</div>
+      <h2 style="font-size:15px;margin-top:10px">كل الشيكات</h2>
       <table id="ch-table"><thead><tr>
         <th>الاستحقاق</th><th>الطرف</th><th>المبلغ</th><th>البنك</th><th>رقم الشيك</th><th>الحالة</th><th>ملاحظات</th><th></th>
       </tr></thead><tbody></tbody></table>
@@ -694,6 +715,7 @@
         <button class="ghost" onclick="printStatement(false)">طباعة الظاهر</button>
         <button onclick="printStatement(true)">طباعة المحدد</button>
         <button class="ghost" onclick="shareStatementWhatsApp()">مشاركة واتساب</button>
+        <button onclick="statementPdfWhatsApp()">📎 PDF + واتساب</button>
       </div>
       <p class="muted">حدّد اللي عاوز تطبعه بعلامة ✓ من أول الجدول، أو اطبع الظاهر بعد الفلترة. لحفظ PDF: من نافذة الطباعة اختر "حفظ كـ PDF".</p>
       <div class="cards" id="s-cards"></div>
@@ -735,6 +757,56 @@
     </div>
   </section>
 
+  <!-- quotations -->
+  <section id="tab-quotes" class="hidden">
+    <div class="panel">
+      <h2>عروض الأسعار <span class="sub">عرض سعر بشيكة الألوان زي الفاتورة - ويتحول لفاتورة بضغطة</span></h2>
+      <button onclick="openQuoteModal()">➕ عرض سعر جديد</button>
+    </div>
+    <div class="panel">
+      <table id="q-table"><thead><tr>
+        <th>رقم</th><th>التاريخ</th><th>العميل</th><th>أزواج</th><th>الإجمالي</th><th>الحالة</th><th></th>
+      </tr></thead><tbody></tbody></table>
+    </div>
+  </section>
+
+  <div class="modal-bg" id="quote-modal">
+    <div class="modal" style="max-width:760px">
+      <h3>عرض سعر جديد</h3>
+      <div class="row">
+        <div class="field"><label>العميل *</label><select id="q-customer" style="width:200px"></select></div>
+        <div class="field"><label>التاريخ</label><input id="q-date" type="date"></div>
+        <div class="field"><label>ملاحظات</label><input id="q-notes" style="width:180px"></div>
+      </div>
+      <table style="width:100%"><thead><tr><th>الصنف</th><th>اللون</th><th>أزواج</th><th>السعر</th><th>الإجمالي</th><th></th></tr></thead>
+      <tbody id="q-items"></tbody></table>
+      <div class="row" style="margin-top:8px">
+        <button class="ghost" onclick="qAddItemRow()">+ سطر</button>
+        <button class="ghost" title="شبكة ألوان: موديل واحد بعدة ألوان" onclick="qSmartRow()">🎨 شبكة ألوان</button>
+        <span style="margin-right:auto">الأزواج: <b id="q-pairs" class="num">0</b> - الإجمالي: <b id="q-total" class="num">0</b></span>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button onclick="saveQuote()">حفظ عرض السعر</button>
+        <button class="ghost" onclick="closeModal('quote-modal')">إلغاء</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-bg" id="qsmart-modal">
+    <div class="modal">
+      <h3>شبكة ألوان - موديل واحد بعدة ألوان</h3>
+      <div class="row">
+        <div class="field"><label>الموديل</label><input id="qs-name" list="se-items" style="width:170px" onchange="qPriceLookup()"></div>
+        <div class="field"><label>سعر الزوج</label><input id="qs-price" type="number" min="0" step="0.01" class="num" style="width:110px"></div>
+      </div>
+      <div id="qs-colors"></div>
+      <div class="row" style="margin-top:10px">
+        <button onclick="qSmartApply()">إضافة للعرض</button>
+        <button class="ghost" onclick="closeModal('qsmart-modal')">إلغاء</button>
+      </div>
+    </div>
+  </div>
+
   <!-- import (admin) -->
   <section id="tab-import" class="hidden">
     <div class="panel">
@@ -766,6 +838,9 @@
         <button onclick="saveSettings()">حفظ الإعدادات</button>
       </div>
       <div class="muted" id="set-backup-info"></div>
+      <h2 style="font-size:15px;margin-top:14px">استعادة من نسخة احتياطية <span class="sub">النسخة اليومية بتتعمل لوحدها أول تشغيل كل يوم</span></h2>
+      <button class="ghost" onclick="loadBackups()">عرض النسخ المتاحة</button>
+      <div id="bk-list" style="margin-top:8px"></div>
     </div>
     <div class="panel">
       <h2>المستخدمون</h2>
@@ -975,7 +1050,7 @@ async function doLogout(){
 }
 
 /* ---------- nav ---------- */
-const TAB_SEC = {dash:'accounts',accounts:'accounts',invoice:'accounts',sales:'accounts',purchases:'accounts',payments:'accounts',statement:'accounts',treasury:'accounts',cheques:'accounts',profit:'accounts',inventory:'inventory',production:'production',settings:'settings',import:'settings',defs:'settings',sync:'settings'};
+const TAB_SEC = {dash:'accounts',accounts:'accounts',invoice:'accounts',sales:'accounts',purchases:'accounts',payments:'accounts',statement:'accounts',treasury:'accounts',cheques:'accounts',quotes:'accounts',profit:'accounts',inventory:'inventory',production:'production',settings:'settings',import:'settings',defs:'settings',sync:'settings'};
 const INV_TITLES = {materials:'المخزن - الخامات',soles:'المخزن - النعال',leather:'المخزن - الجلد (باكو)',ready:'المخزن - المخزون الجاهز',orders:'الإنتاج - أوامر الإنتاج',models:'الإنتاج - الموديلات'};
 function showSection(sec){
   if(currentUser && currentUser.role==='accountant' && sec!=='accounts'){
@@ -1009,9 +1084,11 @@ function showTab(t, kind){
   if(t==='treasury') loadTreasury();
   if(t==='cheques') loadCheques();
   if(t==='collections') loadCollections();
+  if(t==='quotes') loadQuotes();
   if(t==='reports'){
     if(!document.getElementById('mc-month').value) document.getElementById('mc-month').value=today().slice(0,7);
     loadTopItems();
+    loadModelProfit();
   }
   if(t==='profit'){
     if(!document.getElementById('pr-month').value) document.getElementById('pr-month').value=today().slice(0,7);
@@ -1059,6 +1136,7 @@ function onInvoiceKind(){
 
 /* ---------- dashboard ---------- */
 async function loadDash(){
+  loadToday();
   const d = await api('/api/dashboard');
   document.getElementById('dash-cards').innerHTML = [
     ['المبيعات', fmt(d.customer.sales)],['المحصل من العملاء', fmt(d.customer.paid)],
@@ -1169,11 +1247,12 @@ async function loadItems(){
   if(tb) tb.innerHTML=itemsMaster.map(it=>`<tr>
     <td>${esc(it.name)}</td><td class="num">${esc(it.code||'')}</td><td class="num">${fmt(it.retail_price)}</td>
     <td class="num">${wholesaleDivisor?fmt(it.retail_price/wholesaleDivisor):'-'}</td>
+    <td class="num">${it.cost?fmt(it.cost):'-'}</td>
     <td><button class="small ghost" onclick="editItem(${it.id})">تعديل</button></td></tr>`).join('');
 }
 function openItemModal(){
   document.getElementById('item-form-title').textContent='إضافة صنف';
-  for(const id of ['it-id','it-name','it-code','it-retail']) document.getElementById(id).value='';
+  for(const id of ['it-id','it-name','it-code','it-retail','it-cost']) document.getElementById(id).value='';
   document.getElementById('it-div').textContent=wholesaleDivisor;
   openModal('item-modal');
 }
@@ -1184,13 +1263,14 @@ function editItem(id){
   document.getElementById('it-name').value=it.name;
   document.getElementById('it-code').value=it.code||'';
   document.getElementById('it-retail').value=it.retail_price||'';
+  document.getElementById('it-cost').value=it.cost||'';
   document.getElementById('it-div').textContent=wholesaleDivisor;
   openModal('item-modal');
 }
 async function saveItem(){
   if(!v('it-name')){toast('اكتب اسم الصنف',true);return;}
   try{
-    await api('/api/items',{method:'POST',body:JSON.stringify({name:v('it-name'),code:v('it-code'),retail_price:v('it-retail')||0})});
+    await api('/api/items',{method:'POST',body:JSON.stringify({name:v('it-name'),code:v('it-code'),retail_price:v('it-retail')||0,cost:v('it-cost')||0})});
     toast('تم حفظ الصنف'); closeModal('item-modal'); loadItems(); loadItemNames();
   }catch(e){toast(e.message,true);}
 }
@@ -1888,6 +1968,8 @@ async function loadCheques(){
   const st=document.getElementById('ch-filter').value;
   const r=await api('/api/cheques'+(st?'?status='+st:''));
   const list=r.cheques||[];
+  const soonD=new Date(Date.now()+2*864e5).toISOString().slice(0,10);
+  list.forEach(c=>{ c.due_soon = ['pending','endorsed'].includes(c.status) && !c.overdue && c.due_date<=soonD; });
   const t=r.totals||{};
   document.getElementById('ch-totals').innerHTML=[
     ['في إيدنا (تحت التحصيل)',fmt(t.in_hand||0)],['مظهّر لموردين',fmt(t.endorsed||0)],
@@ -1908,13 +1990,31 @@ async function loadCheques(){
     } else {
       acts=` <button class="small ghost" onclick="setCheque(${c.id},'pending')">إرجاع للانتظار</button>`+acts;
     }
-    return `<tr${c.overdue?' style="background:#fee2e2"':''}>
-    <td class="num ${c.overdue?'bad':''}"><b>${esc(c.due_date)}</b>${c.overdue?' (متأخر)':''}</td>
+    return `<tr${c.overdue?' style="background:#fee2e2"':c.due_soon?' style="background:#fef9c3"':''}>
+    <td class="num ${c.overdue?'bad':''}"><b>${esc(c.due_date)}</b>${c.overdue?' (متأخر)':c.due_soon?' (قريب)':''}</td>
     <td>${esc(c.customer_name)}${c.party_kind==='supplier'?' (مورد)':''}</td>
     <td class="num"><b>${fmt(c.amount)}</b></td><td>${esc(c.bank)}</td><td class="num">${esc(c.cheque_number)}</td>
     <td>${statusHtml}</td>
     <td>${esc(c.notes)}${c.status==='endorsed'&&c.endorsed_date?'<div class="muted">تظهير: '+esc(c.endorsed_date)+'</div>':''}</td>
     <td style="white-space:nowrap">${acts}</td></tr>`;
+  }).join('');
+  renderChequeAgenda(list);
+}
+function renderChequeAgenda(all){
+  const el=document.getElementById('ch-upcoming');
+  if(!el) return;
+  const t=today();
+  const in30=new Date(Date.now()+30*864e5).toISOString().slice(0,10);
+  const soon=new Date(Date.now()+2*864e5).toISOString().slice(0,10);
+  const up=all.filter(c=>['pending','endorsed'].includes(c.status)&&c.due_date<=in30);
+  if(!up.length){ el.innerHTML='<span class="muted">مفيش شيكات مستحقة في خلال 30 يوم</span>'; return; }
+  const groups={};
+  up.forEach(c=>{ (groups[c.due_date]=groups[c.due_date]||[]).push(c); });
+  el.innerHTML=Object.keys(groups).sort().map(d=>{
+    const label=d<t?'متأخر!':d===t?'النهاردة':d<=soon?'خلال يومين':d;
+    const cls=d<t?'bad':d<=soon?'':'muted';
+    return '<div style="margin:6px 0"><b class="'+cls+' num">'+label+(label!==d?' ('+d+')':'')+'</b>'
+      +groups[d].map(c=>'<div style="display:flex;justify-content:space-between;padding:2px 8px;border-bottom:1px solid var(--line);font-size:13px"><span>'+esc(c.customer_name)+' - '+esc(c.bank||'')+' '+esc(c.cheque_number||'')+'</span><span class="num"><b>'+fmt(c.amount)+'</b></span></div>').join('')+'</div>';
   }).join('');
 }
 let endorseChequeId=null, endorseCache={};
@@ -1963,6 +2063,212 @@ document.addEventListener('input',e=>{
   if(e.target && e.target.id==='pm-cheque')
     document.getElementById('pm-cheque-meta').style.display = (+e.target.value>0)?'flex':'none';
 });
+
+/* ---------- 1.7.0: today panel ---------- */
+async function loadToday(){
+  try{
+    const t=await api('/api/today');
+    document.getElementById('today-date').textContent=t.date;
+    let h='<div class="cards">'
+      +'<div class="card"><div class="t">داخل الخزنة النهاردة</div><div class="v num ok">'+fmt(t.treasury_in)+'</div></div>'
+      +'<div class="card"><div class="t">خارج من الخزنة النهاردة</div><div class="v num bad">'+fmt(t.treasury_out)+'</div></div>'
+      +'<div class="card"><div class="t">شيكات تستحق النهاردة</div><div class="v num">'+t.cheques_due_today.length+'</div></div>'
+      +'<div class="card"><div class="t">شيكات متأخرة</div><div class="v num '+(t.cheques_overdue_count?'bad':'')+'">'+t.cheques_overdue_count+' ('+fmt(t.cheques_overdue_sum)+')</div></div>'
+      +'<div class="card"><div class="t">عملاء متأخرين</div><div class="v num '+(t.overdue_customers_count?'bad':'')+'">'+t.overdue_customers_count+'</div></div>'
+      +'</div>';
+    const crow=c=>'<div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid var(--line);font-size:13px"><span>'+esc(c.customer_name)+' - '+(c.bank||'')+' '+(c.cheque_number||'')+'</span><span class="num"><b>'+fmt(c.amount)+'</b> ('+c.due_date+')</span></div>';
+    if(t.cheques_due_today.length)
+      h+='<p style="color:#b45309;font-weight:600;margin:8px 0 2px">شيكات لازم تتحصل النهاردة:</p>'+t.cheques_due_today.map(crow).join('');
+    if(t.cheques_due_soon.length)
+      h+='<p style="color:#92400e;margin:8px 0 2px">شيكات بتستحق خلال '+t.cheque_alert_days+' يوم:</p>'+t.cheques_due_soon.map(crow).join('');
+    if(t.cheques_overdue_count)
+      h+='<p class="bad" style="margin:8px 0 2px">شيكات عدّت تاريخ استحقاقها وماتصرفتش:</p>'+t.cheques_week.filter(c=>c.overdue).map(crow).join('');
+    if(t.overdue_customers.length)
+      h+='<p class="bad" style="margin:8px 0 2px">عملاء متأخرين في السداد:</p>'+t.overdue_customers.map(c=>'<div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid var(--line);font-size:13px"><span>'+esc(c.name)+'</span><span class="num"><b>'+fmt(c.balance)+'</b> - متأخر '+c.days+' يوم</span></div>').join('');
+    if(!t.cheques_due_today.length && !t.cheques_due_soon.length && !t.cheques_overdue_count && !t.overdue_customers.length)
+      h+='<p class="ok" style="margin:8px 0">مفيش مستحقات النهاردة ولا شيكات قريبة ولا عملاء متأخرين 🎉</p>';
+    const wk=t.cheques_week.filter(c=>!c.overdue&&!c.due_today&&!c.due_soon);
+    if(wk.length) h+='<details style="margin-top:6px"><summary class="muted" style="cursor:pointer">شيكات الأسبوع الجاي ('+wk.length+')</summary>'+wk.map(crow).join('')+'</details>';
+    document.getElementById('today-body').innerHTML=h;
+    document.getElementById('today-body').classList.remove('muted');
+  }catch(e){ document.getElementById('today-body').textContent=e.message; }
+}
+
+/* ---------- quotations ---------- */
+function qAddItemRow(it){
+  it=it||{};
+  const tr=document.createElement('tr');
+  tr.innerHTML='<td><input class="it-name" list="se-items" value="'+esc(it.item_name||'')+'"></td>'
+    +'<td><input class="it-color" value="'+esc(it.color||'')+'"></td>'
+    +'<td><input class="it-pairs num" type="number" min="0" step="1" value="'+(it.pairs??'')+'" oninput="qCalc()"></td>'
+    +'<td><input class="it-price num" type="number" min="0" step="0.01" value="'+(it.price??'')+'" oninput="qCalc()"></td>'
+    +'<td class="it-total num">0</td>'
+    +'<td><button class="small danger" onclick="this.closest(\"tr\").remove();qCalc()">×</button></td>';
+  document.getElementById('q-items').appendChild(tr);
+  qCalc();
+}
+function qReadItems(){
+  const items=[]; let total=0, pairs=0;
+  document.querySelectorAll('#q-items tr').forEach(tr=>{
+    const name=tr.querySelector('.it-name').value.trim();
+    const p=parseFloat(tr.querySelector('.it-pairs').value)||0;
+    const pr=parseFloat(tr.querySelector('.it-price').value)||0;
+    const t=p*pr; tr.querySelector('.it-total').textContent=fmt(t);
+    if(name){ items.push({item_name:name,color:tr.querySelector('.it-color').value.trim(),pairs:p,price:pr}); total+=t; pairs+=p; }
+  });
+  return {items,total,pairs};
+}
+function qCalc(){ const r=qReadItems(); document.getElementById('q-total').textContent=fmt(r.total); document.getElementById('q-pairs').textContent=fmt(r.pairs); }
+async function openQuoteModal(){
+  await refreshCustomers();
+  const sel=document.getElementById('q-customer');
+  sel.innerHTML='<option value="">اختر العميل</option>'+customers.filter(c=>c.kind!=='supplier').map(c=>'<option value="'+c.id+'">'+esc(c.name)+'</option>').join('');
+  document.getElementById('q-date').value=today();
+  document.getElementById('q-notes').value='';
+  document.getElementById('q-items').innerHTML='';
+  qAddItemRow();
+  openModal('quote-modal');
+}
+function qAutoPrice(name){
+  const it=(itemsMaster||[]).find(x=>x.name===name);
+  const c=customers.find(x=>x.id==v('q-customer'));
+  if(!it) return 0;
+  let p=(it.retail_price||0)/(wholesaleDivisor||1.22);
+  if(c&&c.discount_pct) p=p*(1-c.discount_pct/100);
+  return Math.round(p*100)/100;
+}
+function qSmartRow(){
+  document.getElementById('qs-name').value='';
+  document.getElementById('qs-price').value='';
+  qsRenderChips();
+  openModal('qsmart-modal');
+}
+function qsRenderChips(){
+  document.getElementById('qs-colors').innerHTML=colorsList.map(c=>
+    '<label class="se-chip" data-color="'+esc(c)+'">'
+    +'<span class="dot" style="background:'+(COLOR_DOTS[c]||'#a8a29e')+'"></span>'
+    +'<input type="checkbox" class="se-chip-on" onchange="this.closest(\".se-chip\").classList.toggle(\"on\",this.checked)">'
+    +'<span>'+esc(c)+'</span>'
+    +'<input type="number" class="se-chip-qty q num" min="0" step="1" placeholder="0">'
+    +'</label>').join('')||'<span class="muted">مفيش ألوان متعرفة - عرّفها من زرار إدارة الألوان في الفاتورة</span>';
+}
+function qPriceLookup(){ const n=v('qs-name').trim(); if(!n) return; const p=qAutoPrice(n); if(p) document.getElementById('qs-price').value=p; }
+function qSmartApply(){
+  const name=v('qs-name').trim(); if(!name){toast('اكتب الموديل الأول',true);return;}
+  const price=parseFloat(v('qs-price'))||0;
+  let added=0;
+  document.querySelectorAll('#qs-colors .se-chip').forEach(ch=>{
+    if(ch.querySelector('.se-chip-on').checked){
+      const qty=parseFloat(ch.querySelector('.se-chip-qty').value)||0;
+      if(qty>0){ qAddItemRow({item_name:name,color:ch.dataset.color,pairs:qty,price:price}); added++; }
+    }
+  });
+  if(!added){toast('علّم على لون واحد على الأقل واكتب العدد',true);return;}
+  closeModal('qsmart-modal');
+  qCalc();
+}
+async function saveQuote(){
+  const cid=v('q-customer'); if(!cid){toast('اختر العميل أولاً',true);return;}
+  const {items}=qReadItems(); if(!items.length){toast('أضف صنفاً واحداً على الأقل',true);return;}
+  try{
+    const r=await api('/api/quotations',{method:'POST',body:JSON.stringify({customer_id:+cid,date:v('q-date')||today(),notes:v('q-notes'),items})});
+    toast('اتحفظ عرض السعر '+r.number);
+    closeModal('quote-modal');
+    loadQuotes();
+  }catch(e){toast(e.message,true);}
+}
+const Q_STATUS={open:'مفتوح',converted:'اتحوّل لفاتورة',canceled:'ملغي'};
+async function loadQuotes(){
+  try{
+    const list=await api('/api/quotations');
+    document.querySelector('#q-table tbody').innerHTML=list.map(q=>'<tr>'
+      +'<td class="num">'+esc(q.number||('#'+q.id))+'</td><td class="num">'+q.date+'</td><td>'+esc(q.customer_name)+'</td>'
+      +'<td class="num">'+fmt(q.pairs)+'</td><td class="num"><b>'+fmt(q.total)+'</b></td>'
+      +'<td>'+(q.status==='open'?'<span class="badge" style="background:#dcfce7">مفتوح</span>':q.status==='converted'?'<span class="badge">اتحوّل لفاتورة</span>':'<span class="badge" style="background:#fee2e2">ملغي</span>')+'</td>'
+      +'<td style="white-space:nowrap">'
+      +'<button class="small ghost" onclick="printQuote('+q.id+')">طباعة</button> '
+      +(q.status==='open'?'<button class="small" onclick="convertQuote('+q.id+')">تحويل لفاتورة</button> <button class="small danger" onclick="cancelQuote('+q.id+')">إلغاء</button>':'')
+      +'</td></tr>').join('')
+      ||'<tr><td colspan="7" class="muted">مفيش عروض أسعار لسه</td></tr>';
+  }catch(e){toast(e.message,true);}
+}
+async function printQuote(id){
+  try{
+    const q=await api('/api/quotations/'+id);
+    const rows=q.items.map((it,i)=>'<tr><td class="num">'+(i+1)+'</td><td>'+esc(it.item_name)+'</td><td>'+esc(it.color||'')+'</td><td class="num">'+fmt(it.pairs)+'</td><td class="num">'+fmt(it.price)+'</td><td class="num">'+fmt(it.pairs*it.price)+'</td></tr>').join('');
+    showPrint('<div class="doc">'
+      +companyHeader(q.company||{}, 'عرض سعر رقم '+(q.number||('#'+q.id)))
+      +'<div class="sub">التاريخ: <span class="num">'+q.date+'</span></div>'
+      +'<div class="fields"><div><b>العميل:</b> '+esc(q.customer_name)+(q.customer_phone?' - تليفون: <span class="num">'+esc(q.customer_phone)+'</span>':'')+'</div></div>'
+      +'<table><thead><tr><th>م</th><th>الصنف</th><th>اللون</th><th>أزواج</th><th>سعر الزوج</th><th>الإجمالي</th></tr></thead><tbody>'+rows+'</tbody></table>'
+      +'<table style="width:50%;margin-right:auto"><tr><td><b>الإجمالي</b></td><td class="num"><b>'+fmt(q.total)+'</b></td></tr></table>'
+      +(q.notes?'<p>'+esc(q.notes)+'</p>':'')
+      +'<div class="sig"><span>توقيع العميل: ................</span><span>توقيع البائع: ................</span></div>'
+      +'</div>');
+  }catch(e){toast(e.message,true);}
+}
+async function convertQuote(id){
+  if(!confirm('تحويل عرض السعر ده لفاتورة بيع بتاريخ النهاردة؟')) return;
+  try{
+    const r=await api('/api/quotations/'+id+'/convert',{method:'POST',body:'{}'});
+    toast('اتعملت الفاتورة '+(r.invoice_number||'')+' من عرض السعر');
+    loadQuotes();
+  }catch(e){toast(e.message,true);}
+}
+async function cancelQuote(id){
+  if(!confirm('إلغاء عرض السعر ده؟')) return;
+  try{ await api('/api/quotations/'+id+'/cancel',{method:'POST',body:'{}'}); loadQuotes(); }
+  catch(e){toast(e.message,true);}
+}
+
+/* ---------- model profit ---------- */
+async function loadModelProfit(){
+  try{
+    const q=[]; if(v('mp-from')) q.push('from='+v('mp-from')); if(v('mp-to')) q.push('to='+v('mp-to'));
+    const r=await api('/api/model-profit'+(q.length?'?'+q.join('&'):''));
+    document.getElementById('mp-summary').innerHTML='<b>إجمالي الإيراد: <span class="num">'+fmt(r.total_revenue)+'</span> - إجمالي الربح: <span class="num">'+fmt(r.total_profit)+'</span></b>';
+    document.querySelector('#mp-table tbody').innerHTML=r.items.map(x=>'<tr>'
+      +'<td>'+esc(x.item_name)+'</td><td class="num">'+fmt(x.pairs)+'</td><td class="num">'+fmt(x.revenue)+'</td>'
+      +'<td class="num">'+(x.has_cost?fmt(x.unit_cost):'<span class="bad">؟</span>')+'</td>'
+      +'<td class="num '+(x.profit<0?'bad':'ok')+'"><b>'+fmt(x.profit)+'</b></td><td class="num">'+x.margin+'%</td></tr>').join('')
+      ||'<tr><td colspan="6" class="muted">مفيش مبيعات في الفترة دي</td></tr>';
+  }catch(e){toast(e.message,true);}
+}
+
+/* ---------- backups & restore ---------- */
+async function loadBackups(){
+  try{
+    const r=await api('/api/backups');
+    document.getElementById('bk-list').innerHTML = r.backups.length
+      ? '<table style="width:100%"><thead><tr><th>النسخة</th><th>التاريخ</th><th>الحجم</th><th></th></tr></thead><tbody>'
+        +r.backups.map(b=>'<tr><td class="num" style="font-size:12px">'+esc(b.file)+'</td><td class="num">'+b.mtime+'</td><td class="num">'+fmt(Math.round(b.size/1024))+' KB</td>'
+        +'<td><button class="small danger" data-f="'+esc(b.file)+'" onclick="restoreBackup(this.dataset.f)">استعادة</button></td></tr>').join('')+'</tbody></table>'
+        +'<p class="muted" style="font-size:12px">الفولدر: '+esc(r.dir)+'</p>'
+      : '<p class="muted">مفيش نسخ احتياطية لسه</p>';
+  }catch(e){toast(e.message,true);}
+}
+async function restoreBackup(file){
+  if(!confirm('استعادة النسخة '+file+'؟\nكل البيانات الحالية هتتبدل ببيانات النسخة دي.\n(البرنامج هياخد نسخة أمان من الوضع الحالي قبل الاستبدال)')) return;
+  try{
+    const r=await api('/api/restore',{method:'POST',body:JSON.stringify({file})});
+    alert('تمت الاستعادة من '+r.restored+'.\nنسخة أمان من الوضع السابق: '+r.safety_backup+'\nالبرنامج هيتحدث دلوقتي.');
+    location.reload();
+  }catch(e){toast(e.message,true);}
+}
+
+/* ---------- statement PDF + WhatsApp ---------- */
+function statementPdfWhatsApp(){
+  if(!lastStatement){toast('اعرض كشف الحساب الأول',true);return;}
+  const c=customers.find(x=>x.id==v('s-customer'));
+  const phone=(c&&c.phone||'').replace(/[^0-9]/g,'');
+  printStatement(false);
+  if(phone){
+    const txt='كشف حسابكم من نيكست للجلديات - المتبقي: '+fmt(lastStatement.summary.remaining)+' جنيه. هنبعت الـ PDF في الرسالة الجاية.';
+    setTimeout(()=>window.open('https://wa.me/'+phone+'?text='+encodeURIComponent(txt),'_blank'),400);
+  }else{
+    toast('الطرف ده مالوش رقم تليفون مسجل - اطبع الـ PDF وابعته يدويًا',true);
+  }
+}
 
 /* ---------- payment voucher ---------- */
 async function printVoucher(id){
