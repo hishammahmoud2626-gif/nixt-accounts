@@ -30,7 +30,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-APP_VERSION = "1.1.3"
+APP_VERSION = "1.1.4"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
@@ -1643,6 +1643,22 @@ def show_message(text):
         pass
 
 
+def kill_stale_server():
+    """Kill pythonw.exe processes hosting an older Nixt server, excluding self."""
+    my_pid = os.getpid()
+    try:
+        subprocess.run(["taskkill", "/F", "/IM", "pythonw.exe",
+                        "/FI", "PID ne %d" % my_pid],
+                       capture_output=True, timeout=15)
+    except Exception:
+        pass
+    for _ in range(24):
+        if not port_busy():
+            return True
+        time.sleep(0.25)
+    return not port_busy()
+
+
 def main():
     init_db()
     if port_busy():
@@ -1650,16 +1666,24 @@ def main():
         if ver == APP_VERSION and server_serves_index():
             if open_app_window() is None:
                 open_browser()
-        elif ver and ver != APP_VERSION:
-            show_message(
-                "فيه نسخة أقدم من البرنامج (إصدار " + ver + ") لسه شغالة في الخلفية.\n\n"
-                + "افتح Task Manager بـ Ctrl+Shift+Esc واعمل End task لـ pythonw.exe، "
-                + "أو اعمل Restart للجهاز، وبعدين شغّل البرنامج تاني.")
+            return
+        if ver and version_tuple(ver) > version_tuple(APP_VERSION):
+            # a NEWER copy is already running: just open its window
+            if open_app_window() is None:
+                open_browser()
+            return
+        if ver and version_tuple(ver) < version_tuple(APP_VERSION):
+            # an older copy is stuck in the background: stop it and continue
+            if not kill_stale_server():
+                show_message(
+                    "فيه نسخة أقدم من البرنامج (إصدار " + ver + ") معلّقة ومش قادر أقفلها.\n\n"
+                    + "اعمل Restart للجهاز وبعدين شغّل البرنامج تاني.")
+                return
         else:
             show_message(
-                "فيه نسخة قديمة من البرنامج معلّقة أو برنامج تاني مسك منفذ التشغيل.\n\n"
+                "فيه برنامج تاني مسك منفذ التشغيل.\n\n"
                 + "اعمل Restart للجهاز وبعدين شغّل البرنامج تاني.")
-        return
+            return
     auto_backup_tick()
     threading.Thread(target=auto_backup_loop, daemon=True).start()
     try:
