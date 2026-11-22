@@ -1203,6 +1203,18 @@
         <p id="mob-restart" style="color:var(--warn);font-weight:700"></p>
       </div>
     </div>
+    <div class="panel" id="drv-panel" style="display:none">
+      <h2>المزامنة مع جوجل درايف <span class="sub">نسخة عرض محدثة بعد كل حفظ — الموبايل يشوفها حتى والكمبيوتر مقفول</span></h2>
+      <div class="row">
+        <span id="drv-status" class="muted">...</span>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <button id="drv-connect" onclick="drvConnect()">ربط جوجل درايف</button>
+        <button id="drv-upload" class="ghost" onclick="drvUploadNow()" style="display:none">رفع نسخة الآن</button>
+        <button id="drv-disconnect" class="ghost" onclick="drvDisconnect()" style="display:none">فصل الربط</button>
+      </div>
+      <p class="muted">النسخة بتتخزن في مكان مخفي جوه حساب درايف بتاعك أنت بس — البرنامج مش بيشوف أي ملف تاني. بعد كل حفظ بثواني بتتحدث لوحدها.</p>
+    </div>
     <div class="panel">
       <h2>المستخدمون</h2>
       <div class="row">
@@ -2305,6 +2317,42 @@ async function mobRegen(){
     toast('اتجدد المفتاح');loadMobileConfig();
   }catch(e){toast(e.message,true);}
 }
+async function drvRefresh(){
+  try{
+    const st=await api('/api/drive/status');
+    const panel=document.getElementById('drv-panel');
+    if(!st.configured){panel.style.display='none';return;}
+    panel.style.display='';
+    const el=document.getElementById('drv-status');
+    let txt=st.connected?'مربوط — آخر رفع ناجح: '+(st.last_ok||'لسه'):'غير مربوط';
+    if(st.pending)txt+=' — فيه تعديلات مستنية الرفع';
+    if(st.last_error)txt+=' — آخر خطأ: '+st.last_error;
+    el.textContent=txt;
+    document.getElementById('drv-connect').style.display=st.connected?'none':'';
+    document.getElementById('drv-upload').style.display=st.connected?'':'none';
+    document.getElementById('drv-disconnect').style.display=st.connected?'':'none';
+  }catch(e){}
+}
+async function drvConnect(){
+  try{
+    const r=await api('/api/drive/connect',{method:'POST',body:'{}'});
+    toast('المتصفح اتفتح — اختار حسابك ووافق، وبعدين ارجع هنا');
+    setTimeout(drvRefresh,4000);setTimeout(drvRefresh,10000);
+  }catch(e){toast(e.message,true);}
+}
+async function drvDisconnect(){
+  if(!confirm('فصل جوجل درايف؟ الموبايل مش هيعرض نسخة محدثة وهو بره.'))return;
+  try{
+    await api('/api/drive/disconnect',{method:'POST',body:'{}'});
+    toast('اتفصل الربط');drvRefresh();
+  }catch(e){toast(e.message,true);}
+}
+async function drvUploadNow(){
+  try{
+    await api('/api/drive/upload-now',{method:'POST',body:'{}'});
+    toast('اترفعت النسخة');drvRefresh();
+  }catch(e){toast(e.message,true);}
+}
 async function loadSettings(){
   const s=await api('/api/settings');
   document.getElementById('set-name').value=s.company_name||'';
@@ -2316,7 +2364,7 @@ async function loadSettings(){
   document.getElementById('set-login-users').checked = (s.login_show_users!=='0');
   document.getElementById('set-divisor').value=s.wholesale_divisor||'1.22';
   wholesaleDivisor=parseFloat(s.wholesale_divisor)||1.22;
-  loadMobileConfig();
+  loadMobileConfig(); drvRefresh();
   loadUsers(); loadActivity();
 }
 async function loadActivity(){
