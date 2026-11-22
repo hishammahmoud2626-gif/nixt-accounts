@@ -146,6 +146,8 @@
   <button data-tab="invoice" onclick="showTab('invoice')">فاتورة</button>
   <button data-tab="payments" onclick="showTab('payments')">الدفعات</button>
   <button data-tab="statement" onclick="showTab('statement')">كشف حساب</button>
+  <button data-tab="treasury" onclick="showTab('treasury')">الخزينة</button>
+  <button data-tab="cheques" onclick="showTab('cheques')">الشيكات</button>
 </div>
 <div class="subnav hidden" id="subnav-inventory">
   <button data-tab="inventory" data-inv="materials" class="active" onclick="showTab('inventory','materials')">الخامات</button>
@@ -167,14 +169,14 @@
   <section id="tab-inventory" class="hidden">
     <div class="panel">
       <h2 id="inv-title">المخزن</h2>
-      <p class="muted">قسم المخزن هيشتغل في التحديث الجاي: خامات ونعال وجلد ومخزون جاهز، مع استيراد بياناتك الحالية من MeDo تلقائياً.</p>
+      <p class="muted">قسم المخزن هيشتغل في التحديث الجاي: خامات ونعال وجلد ومخزون جاهز.</p>
     </div>
   </section>
   <!-- production (coming soon) -->
   <section id="tab-production" class="hidden">
     <div class="panel">
       <h2 id="prod-title">الإنتاج</h2>
-      <p class="muted">قسم الإنتاج هيشتغل في التحديث الجاي: موديلات وأوامر إنتاج ومتابعة مراحل التصنيع، مع استيراد بياناتك الحالية من MeDo تلقائياً.</p>
+      <p class="muted">قسم الإنتاج هيشتغل في التحديث الجاي: موديلات وأوامر إنتاج ومتابعة مراحل التصنيع.</p>
     </div>
   </section>
 
@@ -221,6 +223,11 @@
     <div class="panel warn2" id="dash-alerts-panel">
       <h2>تنبيهات</h2>
       <div id="dash-alerts"></div>
+      <div id="dash-cheques"></div>
+    </div>
+    <div class="panel">
+      <h2>أعمار الديون <span class="sub">المتأخرات على العملاء حسب عمر الدين</span></h2>
+      <div id="dash-aging"></div>
     </div>
     <div class="panel">
       <h2>أعلى العملاء مديونية</h2>
@@ -284,6 +291,7 @@
         <div class="field"><label>مصاريف أخرى</label><input id="i-other" type="number" step="0.01" class="num" style="width:100px" value="0" oninput="calcInvoice()"></div>
         <div class="field"><label>خصم (مبلغ)</label><input id="i-discount" type="number" step="0.01" class="num" style="width:100px" value="0" oninput="calcInvoice()"></div>
         <div class="field"><label>ملاحظات</label><input id="i-notes" style="width:220px"></div>
+        <div class="field hidden" id="i-reason-field"><label>سبب المرتجع</label><input id="i-reason" style="width:200px" placeholder="مثال: عيب تصنيع، مقاس"></div>
       </div>
       <div class="totals">
         <span>الأصناف: <b id="i-items-total" class="num">0</b></span>
@@ -314,16 +322,66 @@
         <div class="field"><label>كاش</label><input id="p-cash" type="number" min="0" step="0.01" class="num" style="width:110px" value="0"></div>
         <div class="field"><label>شبكة</label><input id="p-card" type="number" min="0" step="0.01" class="num" style="width:110px" value="0"></div>
         <div class="field"><label>تحويل</label><input id="p-transfer" type="number" min="0" step="0.01" class="num" style="width:110px" value="0"></div>
+        <div class="field"><label>شيك</label><input id="p-cheque" type="number" min="0" step="0.01" class="num" style="width:110px" value="0"></div>
         <div class="field"><label>ملاحظات</label><input id="p-notes" style="width:180px"></div>
         <button onclick="savePayment()">حفظ الدفعة</button>
+      </div>
+      <div class="row" id="p-cheque-meta">
+        <div class="field"><label>استحقاق الشيك *</label><input id="p-cheque-due" type="date"></div>
+        <div class="field"><label>البنك</label><input id="p-cheque-bank" style="width:130px"></div>
+        <div class="field"><label>رقم الشيك</label><input id="p-cheque-number" class="num" style="width:120px"></div>
       </div>
     </div>
     <div class="panel">
       <h2>آخر الدفعات</h2>
       <input class="search" id="pay-search" placeholder="بحث سريع..." oninput="filterTable('pay-table',this.value)">
       <table id="pay-table"><thead><tr>
-        <th>التاريخ</th><th>الطرف</th><th>النوع</th><th>كاش</th><th>شبكة</th><th>تحويل</th><th>الإجمالي</th><th>ملاحظات</th><th></th>
+        <th>التاريخ</th><th>الطرف</th><th>النوع</th><th>كاش</th><th>شبكة</th><th>تحويل</th><th>شيك</th><th>الإجمالي</th><th>ملاحظات</th><th></th>
       </tr></thead><tbody></tbody></table>
+    </div>
+  </section>
+
+  <!-- treasury -->
+  <section id="tab-treasury" class="hidden">
+    <div class="cards" id="tr-cards"></div>
+    <div class="panel">
+      <h2>قيد جديد</h2>
+      <div class="row">
+        <div class="field"><label>النوع</label><select id="tr-kind"><option value="in">قبض</option><option value="out">صرف (مصروف)</option></select></div>
+        <div class="field"><label>البند</label><input id="tr-cat" style="width:170px" placeholder="مثال: إيجار، عمالة، أدوات"></div>
+        <div class="field"><label>المبلغ *</label><input id="tr-amount" type="number" min="0" step="0.01" class="num" style="width:120px"></div>
+        <div class="field"><label>التاريخ</label><input id="tr-date" type="date"></div>
+        <div class="field"><label>ملاحظات</label><input id="tr-notes" style="width:170px"></div>
+        <button onclick="saveTreasury()">حفظ القيد</button>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>قيود الخزينة</h2>
+      <div class="row">
+        <div class="field"><label>الشهر</label><input id="tr-month" type="month" onchange="loadTreasury()"></div>
+        <button class="ghost" onclick="document.getElementById('tr-month').value='';loadTreasury()">الكل</button>
+      </div>
+      <input class="search" id="tr-search" placeholder="بحث سريع..." oninput="filterTable('tr-table',this.value)">
+      <table id="tr-table"><thead><tr>
+        <th>التاريخ</th><th>النوع</th><th>البند</th><th>المبلغ</th><th>ملاحظات</th><th>المصدر</th><th></th>
+      </tr></thead><tbody></tbody></table>
+    </div>
+  </section>
+
+  <!-- cheques -->
+  <section id="tab-cheques" class="hidden">
+    <div class="panel">
+      <h2>الشيكات</h2>
+      <div class="row">
+        <div class="field"><label>الحالة</label><select id="ch-filter" onchange="loadCheques()">
+          <option value="">الكل</option><option value="pending">تحت التحصيل</option>
+          <option value="cashed">تم الصرف</option><option value="bounced">مرتجع</option>
+        </select></div>
+      </div>
+      <table id="ch-table"><thead><tr>
+        <th>الاستحقاق</th><th>الطرف</th><th>المبلغ</th><th>البنك</th><th>رقم الشيك</th><th>الحالة</th><th>ملاحظات</th><th></th>
+      </tr></thead><tbody></tbody></table>
+      <p class="muted">الشيك بيتسجّل من شاشة الدفعات (خانة "شيك"). الشيك المتأخر عن تاريخ استحقاقه بيظهر بالأحمر، واللي قرب يستحق بيظهر في تنبيهات الرئيسية.</p>
     </div>
   </section>
 
@@ -344,27 +402,6 @@
 
   <!-- import (admin) -->
   <section id="tab-import" class="hidden">
-    <div class="panel">
-      <h2>استيراد من MeDo (ملف JSON)</h2>
-      <p class="muted">يجيب العملاء (بخصوماتهم وحدود ائتهم) والموردين (بأرصدتهم الافتتاحية) من ملف التصدير. أرصدة العملاء الافتتاحية تدخلها من الكارت اللي تحته.</p>
-      <div class="row">
-        <input type="file" id="medo-file" accept=".json">
-        <button onclick="medoPreview()">معاينة</button>
-        <button class="ghost hidden" id="medo-run" onclick="medoRun()">تنفيذ الاستيراد</button>
-      </div>
-      <div id="medo-result" class="muted"></div>
-    </div>
-    <div class="panel">
-      <h2>استيراد أرصدة وكشوف MeDo (ملفات CSV الرسمية)</h2>
-      <p class="muted">ملف الأرصدة يحدّث بيانات العملاء وأرصدتهم الافتتاحية. ملف الكشوف يضيف سجل الحركات كاملًا؛ وأي فرق بين مجموع الحركات والرصيد الرسمي يظهر كسطر "رصيد افتتاحي" مصحِّح ويُعرض في تقرير الفروق.</p>
-      <div class="row">
-        <div class="field"><label>ملف الأرصدة (CSV)</label><input type="file" id="mf-bal" accept=".csv,.txt"></div>
-        <div class="field"><label>ملف الكشوف (CSV)</label><input type="file" id="mf-st" accept=".csv,.txt"></div>
-        <button onclick="mfPreview()">معاينة</button>
-        <button class="ghost hidden" id="mf-run" onclick="mfRun()">تنفيذ الاستيراد</button>
-      </div>
-      <div id="mf-result" class="muted"></div>
-    </div>
     <div class="panel">
       <h2>استيراد من Excel / CSV</h2>
       <p class="muted">للأرصدة الافتتاحية أو قوائم العملاء/الموردين. لو الاسم موجود بالفعل يتحدث رصيده الافتتاحي فقط (ممنوع التكرار).</p>
@@ -415,6 +452,19 @@
         <div class="field"><label>الجديدة</label><input id="pw-new" type="password" style="width:150px"></div>
         <button onclick="changePassword()">تغيير</button>
       </div>
+    </div>
+      <div class="panel">
+      <h2>سجل النشاط <span class="sub">آخر 200 حركة</span></h2>
+      <table id="act-table"><thead><tr><th>الوقت</th><th>المستخدم</th><th>الحركة</th><th>التفاصيل</th></tr></thead><tbody></tbody></table>
+    </div>
+    <div class="panel" style="border:1px solid #b91c1c">
+      <h2 style="color:#b91c1c">تصفير البيانات</h2>
+      <p class="muted">يمسح كل البيانات: العملاء والموردين والفواتير والدفعات والموظفين وسجل الحركات. المستخدمون والإعدادات بيفضلوا زي ما هما. البرنامج بياخد نسخة احتياطية تلقائياً قبل المسح. مفيش تراجع بعدها غير بالنسخة الاحتياطية.</p>
+      <div class="row">
+        <div class="field"><label>اكتب "تصفير" للتأكيد</label><input id="wipe-confirm" style="width:160px" autocomplete="off"></div>
+        <button style="background:#b91c1c" onclick="wipeData()">تصفير كل البيانات</button>
+      </div>
+      <div id="wipe-result" class="muted"></div>
     </div>
   </section>
 </main>
@@ -548,7 +598,7 @@ async function doLogout(){
 }
 
 /* ---------- nav ---------- */
-const TAB_SEC = {dash:'accounts',accounts:'accounts',invoice:'accounts',payments:'accounts',statement:'accounts',inventory:'inventory',production:'production',settings:'settings',import:'settings',defs:'settings'};
+const TAB_SEC = {dash:'accounts',accounts:'accounts',invoice:'accounts',payments:'accounts',statement:'accounts',treasury:'accounts',cheques:'accounts',inventory:'inventory',production:'production',settings:'settings',import:'settings',defs:'settings'};
 const INV_TITLES = {materials:'المخزن - الخامات',soles:'المخزن - النعال',leather:'المخزن - الجلد (باكو)',ready:'المخزن - المخزون الجاهز',orders:'الإنتاج - أوامر الإنتاج',models:'الإنتاج - الموديلات'};
 function showSection(sec){
   showTab(sec==='settings'?'settings':sec==='inventory'?'inventory':sec==='production'?'production':'dash');
@@ -574,6 +624,8 @@ function showTab(t, kind){
   if(t==='accounts') setPartyKind(partyKind);
   if(t==='invoice') loadInvoices();
   if(t==='payments') loadPayments();
+  if(t==='treasury') loadTreasury();
+  if(t==='cheques') loadCheques();
   if(t==='settings') loadSettings();
   if(t==='defs') loadEmployees();
 }
@@ -604,7 +656,11 @@ function fillInvoiceParties(){
   el.value=vv;
   document.getElementById('i-party-label').textContent = kind==='supplier'?'المورد *':'العميل *';
 }
-function onInvoiceKind(){ fillInvoiceParties(); calcInvoice(); }
+function onInvoiceKind(){
+  fillInvoiceParties(); calcInvoice();
+  const k=document.getElementById('i-kind').value;
+  document.getElementById('i-reason-field').classList.toggle('hidden', !(k==='return'||k==='purchase_return'));
+}
 
 /* ---------- dashboard ---------- */
 async function loadDash(){
@@ -620,6 +676,24 @@ async function loadDash(){
   al.over_limit.forEach(x=>{ah+=`<li class="bad">⚠ ${esc(x.name)} عدّى حد الائتمان: عليه <b class="num">${fmt(x.balance)}</b> والحد <span class="num">${fmt(x.limit)}</span> <button class="small" onclick="openStatement(${x.id})">كشف</button></li>`;});
   al.stale.forEach(x=>{ah+=`<li>🕐 ${esc(x.name)} عليه <b class="num">${fmt(x.balance)}</b> وآخر حركة منذ <span class="num">${x.days}</span> يوم <button class="small" onclick="openStatement(${x.id})">كشف</button></li>`;});
   document.getElementById('dash-alerts').innerHTML = ah ? `<ul class="alert-list">${ah}</ul>` : '<span class="muted">لا توجد تنبيهات.</span>';
+  const cq=d.cheques_due||[];
+  const today0=today();
+  document.getElementById('dash-cheques').innerHTML = cq.length
+    ? '<h3 style="margin:8px 0 4px">شيكات مستحقة خلال 7 أيام</h3><ul class="alert-list">'+cq.map(c=>
+      `<li class="${c.due_date<today0?'bad':''}">💳 ${esc(c.customer_name)} - شيك <b class="num">${fmt(c.amount)}</b> يستحق <span class="num">${esc(c.due_date)}</span>${c.due_date<today0?' (متأخر)':''}</li>`).join('')+'</ul>'
+    : '';
+  try{
+    const ag=await api('/api/aging');
+    const ac=ag.customers||[];
+    document.getElementById('dash-aging').innerHTML = ac.length
+      ? '<table><thead><tr><th>العميل</th><th>حتى 30 يوم</th><th>31-60</th><th>61-90</th><th>أكثر من 90</th><th>الإجمالي</th><th></th></tr></thead><tbody>'
+        +ac.map(c=>`<tr><td>${esc(c.name)}</td><td class="num">${fmt(c.current)}</td><td class="num">${c.d30?fmt(c.d30):''}</td>
+          <td class="num ${c.d60?'bad':''}">${c.d60?fmt(c.d60):''}</td><td class="num ${c.d90?'bad':''}">${c.d90?fmt(c.d90):''}</td>
+          <td class="num"><b>${fmt(c.total)}</b></td>
+          <td><button class="small" onclick="openStatement(${c.id})">كشف</button></td></tr>`).join('')
+        +`</tbody><tfoot><tr><td><b>الإجمالي</b></td><td class="num"><b>${fmt(ag.totals.current)}</b></td><td class="num"><b>${fmt(ag.totals.d30)}</b></td><td class="num"><b>${fmt(ag.totals.d60)}</b></td><td class="num bad"><b>${fmt(ag.totals.d90)}</b></td><td class="num"><b>${fmt(ag.totals.total)}</b></td><td></td></tr></tfoot></table>`
+      : '<span class="muted">لا توجد ديون قائمة.</span>';
+  }catch(e){ document.getElementById('dash-aging').innerHTML=''; }
   const rows = d.debtors.map(x=>`<tr><td>${esc(x.name)}</td><td class="num bad">${fmt(x.balance)}</td>
     <td><button class="small" onclick="openStatement(${x.id})">كشف</button></td></tr>`).join('');
   document.getElementById('dash-debtors').innerHTML = d.debtors.length
@@ -732,7 +806,7 @@ async function saveInvoice(andPrint){
   const kind=document.getElementById('i-kind').value;
   const body={customer_id:+cid, date:v('i-date')||today(), kind,
     shipping:v('i-shipping')||0, other_charges:v('i-other')||0, discount:v('i-discount')||0,
-    notes:v('i-notes'), items};
+    notes:v('i-notes'), reason:v('i-reason'), items};
   try{
     const r=await api('/api/invoices',{method:'POST',body:JSON.stringify(body)});
     toast('تم حفظ '+KIND_LABEL[kind]+' رقم '+r.id);
@@ -743,7 +817,7 @@ async function saveInvoice(andPrint){
 function resetInvoiceForm(){
   document.getElementById('i-items').innerHTML=''; addItemRow();
   for(const id of ['i-shipping','i-other','i-discount']) document.getElementById(id).value=0;
-  document.getElementById('i-notes').value=''; calcInvoice();
+  document.getElementById('i-notes').value=''; document.getElementById('i-reason').value=''; calcInvoice();
 }
 async function loadInvoices(){
   await refreshCustomers();
@@ -806,19 +880,22 @@ async function loadPayments(){
   document.querySelector('#pay-table tbody').innerHTML=pays.slice(0,80).map(p=>`<tr>
     <td class="num">${p.date}</td><td>${esc(p.customer_name)}</td>
     <td>${p.party_kind==='supplier'?'دفع لمورد':'قبض'}</td>
-    <td class="num">${fmt(p.cash)}</td><td class="num">${fmt(p.card)}</td><td class="num">${fmt(p.transfer)}</td>
+    <td class="num">${fmt(p.cash)}</td><td class="num">${fmt(p.card)}</td><td class="num">${fmt(p.transfer)}</td><td class="num">${fmt(p.cheque)}</td>
     <td class="num"><b>${fmt(p.total)}</b></td><td>${esc(p.notes)}</td>
     <td><button class="small danger" ${currentUser.role!=='admin'?'style="display:none"':''} onclick="delPayment(${p.id})">حذف</button></td></tr>`).join('');
   filterTable('pay-table', document.getElementById('pay-search').value);
 }
 async function savePayment(){
   const cid=v('p-customer'); if(!cid){toast('اختر الطرف أولاً',true);return;}
-  const body={customer_id:+cid,date:v('p-date')||today(),cash:v('p-cash')||0,card:v('p-card')||0,transfer:v('p-transfer')||0,notes:v('p-notes')};
-  if(!(+body.cash||+body.card||+body.transfer)){toast('اكتب مبلغ الدفعة',true);return;}
+  const body={customer_id:+cid,date:v('p-date')||today(),cash:v('p-cash')||0,card:v('p-card')||0,transfer:v('p-transfer')||0,cheque:v('p-cheque')||0,notes:v('p-notes'),
+    cheque_due:v('p-cheque-due'),cheque_bank:v('p-cheque-bank'),cheque_number:v('p-cheque-number')};
+  if(!(+body.cash||+body.card||+body.transfer||+body.cheque)){toast('اكتب مبلغ الدفعة',true);return;}
+  if(+body.cheque&&!body.cheque_due){toast('اكتب تاريخ استحقاق الشيك',true);return;}
   try{
     await api('/api/payments',{method:'POST',body:JSON.stringify(body)});
     toast('تم حفظ الدفعة');
-    for(const id of ['p-cash','p-card','p-transfer']) document.getElementById(id).value=0;
+    for(const id of ['p-cash','p-card','p-transfer','p-cheque']) document.getElementById(id).value=0;
+    for(const id of ['p-cheque-due','p-cheque-bank','p-cheque-number']) document.getElementById(id).value='';
     document.getElementById('p-notes').value='';
     loadPayments();
   }catch(e){toast(e.message,true);}
@@ -872,7 +949,6 @@ function showPrint(html){
 }
 
 /* ---------- import ---------- */
-let medoData=null;
 function readFile(file, asB64){
   return new Promise((res,rej)=>{
     const r=new FileReader();
@@ -880,62 +956,7 @@ function readFile(file, asB64){
     if(asB64) r.readAsDataURL(file); else r.readAsText(file,'utf-8');
   });
 }
-async function medoPreview(){
-  const f=document.getElementById('medo-file').files[0];
-  if(!f){toast('اختر ملف JSON',true);return;}
-  try{
-    const txt=await readFile(f);
-    medoData=JSON.parse(txt);
-    const r=await api('/api/import/medo',{method:'POST',body:JSON.stringify({mode:'preview',data:medoData})});
-    document.getElementById('medo-result').innerHTML=
-      `سيتم استيراد: <b class="num">${r.customers}</b> عميل (موجود منهم <span class="num">${r.customers_dupes}</span> سيتخطاهم)`+
-      ` و <b class="num">${r.suppliers}</b> مورد برصيد افتتاحي إجمالي <span class="num">${fmt(r.suppliers_balance_total)}</span>`+
-      (r.suppliers_dupes?` (موجود منهم <span class="num">${r.suppliers_dupes}</span> سيتخطاهم)`:'')+
-      `<br><span class="bad">${esc(r.note)}</span>`;
-    document.getElementById('medo-run').classList.remove('hidden');
-  }catch(e){ document.getElementById('medo-result').textContent='فشل: '+e.message; }
-}
-async function medoRun(){
-  try{
-    const r=await api('/api/import/medo',{method:'POST',body:JSON.stringify({mode:'commit',data:medoData,filename:document.getElementById('medo-file').files[0].name})});
-    document.getElementById('medo-result').innerHTML=
-      `تم: عملاء جدد <b class="num">${r.customers_added}</b>، موردون جدد <b class="num">${r.suppliers_added}</b>، تم تخطيهم (موجودون) <span class="num">${r.skipped}</span>`;
-    document.getElementById('medo-run').classList.add('hidden');
-    refreshCustomers();
-  }catch(e){ document.getElementById('medo-result').textContent='فشل: '+e.message; }
-}
 let impTable=null, impFields=null, impB64=null, impText=null, impFileName='';
-let mfBalText=null, mfStText=null;
-function mfShow(r){
-  let html=`عملاء في الأرصدة: <b class="num">${r.customers_in_balances}</b> — سطور الكشوف: <b class="num">${r.statement_lines}</b> — إجمالي الأرصدة الرسمية: <b class="num">${fmt(r.total_official)}</b><br>`+
-    `متطابقون (الكشف يفسر الرصيد): <b class="num ok">${r.matched}</b> — غير متطابقين (سيُضاف رصيد افتتاحي مصحِّح): <b class="num bad">${r.mismatched}</b>`;
-  if(r.mismatch_list&&r.mismatch_list.length){
-    html+='<table style="margin-top:8px"><thead><tr><th>الكود</th><th>العميل</th><th>الرصيد الرسمي</th><th>صافي الحركات</th><th>التصحيح الافتتاحي</th></tr></thead><tbody>'+
-      r.mismatch_list.map(m=>`<tr><td class="num">${esc(m.code)}</td><td>${esc(m.name)}</td><td class="num">${fmt(m.official)}</td><td class="num">${fmt(m.history_net)}</td><td class="num">${fmt(m.correction)}</td></tr>`).join('')+
-      '</tbody></table>';
-  }
-  document.getElementById('mf-result').innerHTML=html;
-}
-async function mfPreview(){
-  const fb=document.getElementById('mf-bal').files[0], fs=document.getElementById('mf-st').files[0];
-  if(!fb&&!fs){toast('اختر ملفًا واحدًا على الأقل',true);return;}
-  mfBalText=fb?await readFile(fb):''; mfStText=fs?await readFile(fs):'';
-  try{
-    const r=await api('/api/import/medo-full',{method:'POST',body:JSON.stringify({mode:'preview',balances_text:mfBalText,statements_text:mfStText})});
-    mfShow(r);
-    document.getElementById('mf-run').classList.remove('hidden');
-  }catch(e){ document.getElementById('mf-result').textContent='فشل: '+e.message; }
-}
-async function mfRun(){
-  try{
-    const r=await api('/api/import/medo-full',{method:'POST',body:JSON.stringify({mode:'commit',balances_text:mfBalText,statements_text:mfStText})});
-    document.getElementById('mf-result').innerHTML=
-      `تم: جديد <b class="num">${r.added}</b>، محدث <b class="num">${r.updated}</b>، سطور كشوف <b class="num">${r.lines}</b>، غير متطابقين <span class="num bad">${r.mismatched}</span> (راجعهم بالأسفل)`;
-    mfShow({customers_in_balances:'-',statement_lines:r.lines,total_official:'-',matched:'-',mismatched:r.mismatched,mismatch_list:r.mismatch_list});
-    document.getElementById('mf-run').classList.add('hidden');
-    refreshCustomers();
-  }catch(e){ document.getElementById('mf-result').textContent='فشل: '+e.message; }
-}
 async function impPreview(){
   const f=document.getElementById('imp-file').files[0];
   if(!f){toast('اختر ملف',true);return;}
@@ -989,7 +1010,14 @@ async function loadSettings(){
   document.getElementById('set-backup-dir').value=s.backup_dir||'';
   document.getElementById('set-backup-info').textContent='النسخ الاحتياطي الآن يذهب إلى: '+s.backup_dir_effective;
   document.getElementById('set-login-users').checked = (s.login_show_users!=='0');
-  loadUsers();
+  loadUsers(); loadActivity();
+}
+async function loadActivity(){
+  try{
+    const list=await api('/api/activity');
+    document.querySelector('#act-table tbody').innerHTML=list.map(a=>`<tr>
+      <td class="num">${esc(a.ts)}</td><td>${esc(a.username)}</td><td>${esc(a.action)}</td><td>${esc(a.details)}</td></tr>`).join('');
+  }catch(e){}
 }
 async function saveSettings(){
   try{
@@ -1072,6 +1100,68 @@ async function runUpdate(){
   }catch(e){ document.getElementById('update-status').textContent='فشل التحديث: '+e.message; }
 }
 function closeUpdate(){ document.getElementById('update-modal').style.display='none'; }
+
+async function wipeData(){
+  const c=document.getElementById('wipe-confirm').value.trim();
+  if(c!=='تصفير'){ toast('اكتب كلمة تصفير في الخانة الأول', true); return; }
+  const out=document.getElementById('wipe-result');
+  out.textContent='جارٍ أخذ نسخة احتياطية ثم التصفير...';
+  try{
+    const r=await api('/api/wipe',{method:'POST',body:JSON.stringify({confirm:c})});
+    out.innerHTML='تم التصفير. النسخة الاحتياطية محفوظة في: <span class="num">'+esc(r.backup)+'</span>';
+    document.getElementById('wipe-confirm').value='';
+    refreshCustomers();
+  }catch(e){ out.textContent='فشل: '+e.message; }
+}
+/* ---------- treasury & cheques ---------- */
+async function loadTreasury(){
+  const m=document.getElementById('tr-month').value;
+  const r=await api('/api/treasury'+(m?'?month='+m:''));
+  document.getElementById('tr-cards').innerHTML=[
+    ['مقبوضات',fmt(r.total_in)],['مصروفات ومدفوعات',fmt(r.total_out)],['صافي الخزينة',fmt(r.net)],
+  ].map(([t,x])=>`<div class="card"><div class="t">${t}</div><div class="v num">${x}</div></div>`).join('');
+  document.querySelector('#tr-table tbody').innerHTML=r.entries.map(e=>`<tr>
+    <td class="num">${e.date}</td><td>${e.kind==='in'?'<span class="ok">قبض</span>':'<span class="bad">صرف</span>'}</td>
+    <td>${esc(e.category)}</td><td class="num"><b>${fmt(e.amount)}</b></td><td>${esc(e.notes)}</td>
+    <td class="muted">${e.source==='manual'?'يدوي':e.source==='payment'?'من دفعة':'من شيك'}</td>
+    <td>${e.source==='manual'&&currentUser.role==='admin'?`<button class="small danger" onclick="delTreasury(${e.id})">حذف</button>`:''}</td></tr>`).join('');
+  filterTable('tr-table', document.getElementById('tr-search').value);
+}
+async function saveTreasury(){
+  const body={kind:document.getElementById('tr-kind').value,category:v('tr-cat'),
+    amount:v('tr-amount')||0,date:v('tr-date')||today(),notes:v('tr-notes')};
+  try{
+    await api('/api/treasury',{method:'POST',body:JSON.stringify(body)});
+    toast('تم حفظ القيد');
+    for(const id of ['tr-cat','tr-amount','tr-notes']) document.getElementById(id).value='';
+    loadTreasury();
+  }catch(e){toast(e.message,true);}
+}
+async function delTreasury(id){
+  if(!confirm('حذف القيد رقم '+id+'؟')) return;
+  try{ await api('/api/treasury/'+id,{method:'DELETE'}); toast('تم الحذف'); loadTreasury(); }
+  catch(e){ toast(e.message,true); }
+}
+const CHEQUE_STATUS={pending:'تحت التحصيل',cashed:'تم الصرف',bounced:'مرتجع'};
+async function loadCheques(){
+  const st=document.getElementById('ch-filter').value;
+  const list=await api('/api/cheques'+(st?'?status='+st:''));
+  const t0=today();
+  document.querySelector('#ch-table tbody').innerHTML=list.map(c=>`<tr${c.overdue?' style="background:#fee2e2"':''}>
+    <td class="num ${c.overdue?'bad':''}"><b>${esc(c.due_date)}</b>${c.overdue?' (متأخر)':''}</td>
+    <td>${esc(c.customer_name)}${c.party_kind==='supplier'?' (مورد)':''}</td>
+    <td class="num"><b>${fmt(c.amount)}</b></td><td>${esc(c.bank)}</td><td class="num">${esc(c.cheque_number)}</td>
+    <td>${c.status==='cashed'?'<span class="ok">تم الصرف</span>':c.status==='bounced'?'<span class="bad">مرتجع</span>':'تحت التحصيل'}</td>
+    <td>${esc(c.notes)}</td>
+    <td style="white-space:nowrap">${c.status==='pending'
+      ?`<button class="small" onclick="setCheque(${c.id},'cashed')">تم الصرف</button> <button class="small danger" onclick="setCheque(${c.id},'bounced')">مرتجع</button>`
+      :`<button class="small ghost" onclick="setCheque(${c.id},'pending')">إرجاع للانتظار</button>`}</td></tr>`).join('');
+}
+async function setCheque(id,status){
+  try{ await api('/api/cheques/'+id+'/status',{method:'POST',body:JSON.stringify({status})});
+    toast('تم التحديث'); loadCheques(); }
+  catch(e){ toast(e.message,true); }
+}
 
 /* ---------- master data ---------- */
 async function addDefCustomer(kind){
