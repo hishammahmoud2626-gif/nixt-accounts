@@ -31,7 +31,7 @@ from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-APP_VERSION = "1.9.0"
+APP_VERSION = "2.0.0"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -50,6 +50,7 @@ DB_PATH = os.path.join(DATA_DIR, "nixt.db")
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 HOST = "127.0.0.1"
 PORT = 8317
+MOBILE_BOUND = False
 UPDATE_CONFIG = os.path.join(BASE_DIR, "update_url.txt")
 UPDATES_DIR = os.path.join(BASE_DIR, "updates")
 
@@ -441,6 +442,70 @@ def init_db():
 def get_setting(conn, key, default=""):
     r = conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
     return r["value"] if r else default
+
+
+def set_setting(conn, key, value):
+    conn.execute("INSERT INTO settings (key, value) VALUES (?,?) "
+                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, str(value)))
+
+
+def mobile_key_get():
+    conn = get_db()
+    key = get_setting(conn, "mobile_key", "")
+    if not key:
+        key = secrets.token_urlsafe(18)
+        set_setting(conn, "mobile_key", key)
+        conn.commit()
+    conn.close()
+    return key
+
+
+def lan_ips():
+    ips = []
+    try:
+        for _fam, _typ, _pr, _cn, addr in socket.getaddrinfo(
+                socket.gethostname(), None, socket.AF_INET):
+            ip = addr[0]
+            if not ip.startswith("127.") and ip not in ips:
+                ips.append(ip)
+    except Exception:
+        pass
+    if not ips:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            if ip and not ip.startswith("127."):
+                ips.append(ip)
+        except Exception:
+            pass
+    return ips
+
+
+def is_tailscale_ip(ip):
+    try:
+        parts = [int(x) for x in ip.split(".")]
+        return parts[0] == 100 and 64 <= parts[1] <= 127
+    except Exception:
+        return False
+
+
+def mobile_urls(key):
+    out = []
+    for ip in lan_ips():
+        out.append({"ip": ip, "tailscale": is_tailscale_ip(ip),
+                    "url": "http://%s:%d/m?k=%s" % (ip, PORT, key)})
+    return out
+
+
+def mobile_config_payload():
+    conn = get_db()
+    enabled = get_setting(conn, "mobile_enabled", "0") == "1"
+    conn.close()
+    key = mobile_key_get()
+    return {"enabled": enabled, "active": MOBILE_BOUND, "port": PORT,
+            "key": key, "urls": mobile_urls(key), "version": APP_VERSION}
 
 
 def closed_months_list(conn):
@@ -1296,6 +1361,32 @@ class API:
             else:
                 threading.Thread(target=sync_lock_heartbeat, daemon=True).start()
         return 200, {"ok": True}
+
+    # ---------- mobile ----------
+    def mobile_bootstrap(q, user):
+        conn = get_db()
+        name = get_setting(conn, "company_name", "NIXT FOR LEATHER")
+        conn.close()
+        return 200, {"company_name": name, "version": APP_VERSION,
+                     "view_only": (user or {}).get("role") == "view"}
+
+    def mobile_config(q, user):
+        return 200, mobile_config_payload()
+
+    def mobile_config_save(body, user):
+        conn = get_db()
+        changed = []
+        if "enabled" in body:
+            v = "1" if body.get("enabled") else "0"
+            set_setting(conn, "mobile_enabled", v)
+            changed.append("تفعيل=" + v)
+        if body.get("regenerate"):
+            set_setting(conn, "mobile_key", secrets.token_urlsafe(18))
+            changed.append("تجديد المفتاح")
+        log_action(conn, user, "إعدادات الموبايل", ", ".join(changed) or "بدون تغيير")
+        conn.commit()
+        conn.close()
+        return 200, mobile_config_payload()
 
     # ---------- parties (customers & suppliers) ----------
     def list_customers(q, user):
@@ -3041,6 +3132,7 @@ ROUTES_POST = {
     "/api/restore": (lambda b, u: API.restore_backup(b, u), True),
     "/api/monthly-open": (lambda b, u: API.monthly_open(b, u), True),
     "/api/sync/pull": (lambda b, u: API.sync_pull(b, u), True),
+    "/api/mobile/config": (lambda b, u: API.mobile_config_save(b, u), True),
     "/api/sync/force-lock": (lambda b, u: API.sync_force_lock(b, u), True),
 }
 ROUTES_GET = {
@@ -3065,6 +3157,8 @@ ROUTES_GET = {
     "/api/today": (API.today, False),
     "/api/model-profit": (API.model_profit, True),
     "/api/quotations": (API.list_quotations, False),
+    "/api/mobile/bootstrap": (API.mobile_bootstrap, False),
+    "/api/mobile/config": (API.mobile_config, True),
     "/api/backups": (API.list_backups, True),
     "/api/collections": (API.collections, False),
     "/api/monthly-report": (API.monthly_report, True),
@@ -3078,6 +3172,16 @@ STATIC_TYPES = {".html": "text/html; charset=utf-8", ".png": "image/png",
                 ".jpg": "image/jpeg", ".ico": "image/x-icon", ".css": "text/css",
                 ".js": "application/javascript"}
 OPEN_PATHS = {"/api/login", "/api/setup", "/api/me", "/api/version", "/api/login_users"}
+VIEW_GET_PATHS = {"/api/me", "/api/dashboard", "/api/customers", "/api/invoices",
+                  "/api/today", "/api/version", "/api/mobile/bootstrap"}
+
+
+def view_get_allowed(path):
+    if path in VIEW_GET_PATHS:
+        return True
+    if path.startswith("/api/invoices/"):
+        return path.rsplit("/", 1)[1].isdigit()
+    return False
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -3109,6 +3213,14 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _redirect(self, loc, extra_headers=None):
+        self.send_response(302)
+        self.send_header("Location", loc)
+        for k, v in (extra_headers or {}).items():
+            self.send_header(k, v)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def _user(self):
         cookie = self.headers.get("Cookie") or ""
         token = ""
@@ -3129,8 +3241,32 @@ class Handler(BaseHTTPRequestHandler):
         path, q = u.path, parse_qs(u.query)
         try:
             if path == "/" or path == "/index.html":
+                u0 = self._user()
+                if u0 and u0["role"] == "view":
+                    return self._redirect("/mobile")
                 return self._send_file(os.path.join(STATIC_DIR, "index.html"),
                                        "text/html; charset=utf-8")
+            if path == "/m":
+                conn = get_db()
+                en = get_setting(conn, "mobile_enabled", "0") == "1"
+                conn.close()
+                key = (q.get("k") or [""])[0]
+                if en and key and key == mobile_key_get():
+                    token = new_session(None, "موبايل", "view")
+                    extra = [pn + "=" + (q.get(pn) or [""])[0]
+                             for pn in ("s", "inv") if (q.get(pn) or [""])[0]]
+                    loc = "/mobile" + ("?" + "&".join(extra) if extra else "")
+                    return self._redirect(loc, self._set_session(token))
+                return self._send(403, {"error": "mobile_link_invalid"})
+            if path in ("/mobile", "/mobile.html"):
+                return self._send_file(os.path.join(STATIC_DIR, "mobile.html"),
+                                       "text/html; charset=utf-8")
+            if path == "/manifest.json":
+                return self._send_file(os.path.join(STATIC_DIR, "manifest.json"),
+                                       "application/manifest+json; charset=utf-8")
+            if path == "/sw.js":
+                return self._send_file(os.path.join(STATIC_DIR, "sw.js"),
+                                       "application/javascript")
             if path.startswith("/static/"):
                 rel = path[len("/static/"):]
                 if "/" in rel or ".." in rel:
@@ -3147,6 +3283,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(*fn(q, user))
             if not user:
                 return self._send(401, {"error": "login_required"})
+            if user["role"] == "view" and not view_get_allowed(path):
+                return self._send(403, {"error": "view_only"})
             if path in ROUTES_GET:
                 fn, adm = ROUTES_GET[path]
                 if adm and user["role"] != "admin":
@@ -3189,6 +3327,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(status, obj, hdrs)
             if not user:
                 return self._send(401, {"error": "login_required"})
+            if user["role"] == "view":
+                return self._send(403, {"error": "view_only"})
             if SYNC_STATE["locked_by"] and path not in ("/api/sync/pull", "/api/sync/force-lock", "/api/sync/status"):
                 lk = SYNC_STATE["locked_by"]
                 return self._send(423, {"error": "device_locked",
@@ -3433,8 +3573,12 @@ def main():
     auto_backup_tick()
     threading.Thread(target=auto_backup_loop, daemon=True).start()
     sync_on_startup()
+    global MOBILE_BOUND
+    _c = get_db()
+    MOBILE_BOUND = get_setting(_c, "mobile_enabled", "0") == "1"
+    _c.close()
     try:
-        server = ThreadingHTTPServer((HOST, PORT), Handler)
+        server = ThreadingHTTPServer(("0.0.0.0" if MOBILE_BOUND else HOST, PORT), Handler)
     except OSError:
         show_message(
             "البرنامج مش قادر يفتح منفذ التشغيل.\n\n"
