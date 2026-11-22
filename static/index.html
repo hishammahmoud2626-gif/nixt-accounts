@@ -1,0 +1,1084 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/static/favicon.png">
+<title>نيكست للحسابات</title>
+<style>
+  :root{
+    --bg:#f4f5f7; --card:#ffffff; --ink:#1c2430; --muted:#6b7280;
+    --brand:#111827; --accent:#0e7490; --accent2:#155e75;
+    --ok:#15803d; --bad:#b91c1c; --line:#e5e7eb;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:"Segoe UI",Tahoma,Arial,sans-serif;background:var(--bg);color:var(--ink)}
+  header{background:var(--brand);color:#fff;padding:8px 16px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+  header img.logo{height:34px;background:#fff;border-radius:6px;padding:2px 6px}
+  header h1{font-size:17px;margin:0;font-weight:700;white-space:nowrap}
+  header .ver{font-size:11px;color:#9ca3af}
+  header .spacer{flex:1}
+  header nav{display:flex;gap:2px;flex-wrap:wrap}
+  header nav button{background:transparent;color:#d1d5db;border-radius:6px}
+  header nav button:hover{color:#fff;background:#1f2937}
+  header nav button.active{background:var(--accent);color:#fff}
+  button{font-family:inherit;cursor:pointer;border:0;border-radius:8px;padding:8px 14px;font-size:14px;background:var(--accent);color:#fff}
+  button:hover{background:var(--accent2)}
+  button.ghost{background:#374151}
+  button.ghost:hover{background:#4b5563}
+  button.danger{background:var(--bad)}
+  button.small{padding:4px 10px;font-size:12px}
+  .subnav{display:flex;gap:4px;background:#fff;padding:6px 12px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+  .subnav button{background:transparent;color:var(--ink);border-radius:6px}
+  .subnav button.active{background:var(--accent);color:#fff}
+  main{padding:16px;max-width:1150px;margin:0 auto}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:14px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px}
+  .card .t{font-size:12px;color:var(--muted)}
+  .card .v{font-size:20px;font-weight:700;margin-top:4px}
+  .card.warn{border-color:#fca5a5;background:#fef2f2}
+  .panel{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:14px}
+  .panel h2{margin:0 0 10px;font-size:16px}
+  .panel h2 .sub{font-size:12px;color:var(--muted);font-weight:400}
+  table{width:100%;border-collapse:collapse;font-size:14px;background:#fff}
+  th,td{border:1px solid var(--line);padding:7px 9px;text-align:right}
+  th{background:#f3f4f6}
+  input,select,textarea{font-family:inherit;font-size:14px;padding:7px 9px;border:1px solid #d1d5db;border-radius:7px;background:#fff;color:var(--ink)}
+  input:focus,select:focus{outline:2px solid #67e8f9;border-color:var(--accent)}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:end;margin-bottom:10px}
+  .field{display:flex;flex-direction:column;gap:4px}
+  .field label{font-size:12px;color:var(--muted)}
+  .num{font-variant-numeric:tabular-nums;direction:ltr;text-align:right}
+  .ok{color:var(--ok)} .bad{color:var(--bad)}
+  .muted{color:var(--muted);font-size:12px}
+  .search{width:220px;margin-bottom:8px}
+  .toast{position:fixed;bottom:18px;right:18px;background:#111827;color:#fff;padding:10px 16px;border-radius:8px;font-size:14px;display:none;z-index:99;max-width:70%}
+  .hidden{display:none !important}
+  .items-table input{width:100%}
+  .items-table .pairs,.items-table .price{width:90px}
+  .totals{display:flex;gap:18px;flex-wrap:wrap;margin-top:8px;font-size:14px}
+  .totals b{font-size:16px}
+  .modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;align-items:center;justify-content:center;z-index:50}
+  .modal{background:#fff;border-radius:12px;padding:18px;min-width:320px;max-width:560px;max-height:80vh;overflow:auto}
+  .modal h3{margin:0 0 10px}
+  /* login */
+  #login-screen{position:fixed;inset:0;background:#111827;display:flex;align-items:center;justify-content:center;z-index:100}
+  .login-card{background:#fff;border-radius:14px;padding:28px;width:340px;text-align:center}
+  .login-card img{max-width:200px;margin-bottom:8px}
+  .login-card h2{margin:6px 0 16px;font-size:18px}
+  .login-card input{width:100%;margin-bottom:10px;border:2px solid #6b7280;color:#111827;background:#fff}
+  .login-card input::placeholder{color:#4b5563;opacity:1}
+  .login-card button{width:100%}
+  .alert-list{margin:0;padding:0;list-style:none}
+  .alert-list li{padding:6px 4px;border-bottom:1px solid var(--line);font-size:14px}
+  /* print */
+  #print-area{display:none}
+  @media print{
+    body>*{display:none !important}
+    #print-area{display:block !important}
+    #print-area .doc{max-width:800px;margin:0 auto}
+  }
+  .doc{font-size:14px}
+  .doc .dochead{display:flex;align-items:center;gap:14px;border-bottom:2px solid #111;padding-bottom:8px;margin-bottom:8px}
+  .doc .dochead img{height:56px}
+  .doc .dochead .co{font-size:13px;color:#333}
+  .doc h2{text-align:center;margin:4px 0}
+  .doc .sub{text-align:center;color:var(--muted);margin-bottom:10px}
+  .doc table{margin:8px 0}
+  .doc .sig{display:flex;justify-content:space-between;margin-top:36px}
+</style>
+</head>
+<body>
+<!-- login / first-run -->
+<div id="login-screen">
+  <div class="login-card">
+    <img src="/static/logo.png" alt="NIXT">
+    <h2>نظام نيكست للحسابات</h2>
+    <div id="setup-form" class="hidden">
+      <p class="muted">أول تشغيل: أنشئ حساب المدير</p>
+      <input id="su-username" placeholder="اسم المستخدم" autocomplete="off">
+      <input id="su-password" type="password" placeholder="كلمة السر">
+      <input id="su-password2" type="password" placeholder="تأكيد كلمة السر">
+      <button onclick="doSetup()">إنشاء ودخول</button>
+    </div>
+    <div id="login-form" class="hidden">
+      <input id="li-username" placeholder="اسم المستخدم" autocomplete="off">
+      <input id="li-password" type="password" placeholder="كلمة السر" onkeydown="if(event.key==='Enter')doLogin()">
+      <button onclick="doLogin()">دخول</button>
+    </div>
+    <div id="login-err" class="bad" style="margin-top:8px;font-size:13px"></div>
+  </div>
+</div>
+
+<header class="hidden" id="app-header">
+  <img class="logo" src="/static/logo.png" alt="NIXT">
+  <div>
+    <h1>نيكست للحسابات</h1>
+    <span class="ver" id="app-ver"></span>
+  </div>
+  <nav id="nav">
+    <button data-sec="accounts" class="active" onclick="showSection('accounts')">الحسابات</button>
+    <button data-sec="inventory" onclick="showSection('inventory')">المخزن</button>
+    <button data-sec="production" onclick="showSection('production')">الإنتاج</button>
+    <button data-sec="settings" class="admin-only" onclick="showSection('settings')">الإعدادات</button>
+  </nav>
+  <div class="spacer"></div>
+  <span class="muted" style="color:#9ca3af" id="who"></span>
+  <button class="ghost" onclick="doBackup()">نسخة احتياطية</button>
+  <button class="ghost" onclick="openUpdate()">تحديث</button>
+  <button class="ghost" onclick="doLogout()">خروج</button>
+</header>
+<div class="subnav hidden" id="subnav-accounts">
+  <button data-tab="dash" class="active" onclick="showTab('dash')">الرئيسية</button>
+  <button data-tab="accounts" data-kind="customer" onclick="showTab('accounts','customer')">العملاء</button>
+  <button data-tab="accounts" data-kind="supplier" onclick="showTab('accounts','supplier')">الموردين</button>
+  <button data-tab="invoice" onclick="showTab('invoice')">فاتورة</button>
+  <button data-tab="payments" onclick="showTab('payments')">الدفعات</button>
+  <button data-tab="statement" onclick="showTab('statement')">كشف حساب</button>
+</div>
+<div class="subnav hidden" id="subnav-inventory">
+  <button data-tab="inventory" data-inv="materials" class="active" onclick="showTab('inventory','materials')">الخامات</button>
+  <button data-tab="inventory" data-inv="soles" onclick="showTab('inventory','soles')">النعال</button>
+  <button data-tab="inventory" data-inv="leather" onclick="showTab('inventory','leather')">الجلد (باكو)</button>
+  <button data-tab="inventory" data-inv="ready" onclick="showTab('inventory','ready')">المخزون الجاهز</button>
+</div>
+<div class="subnav hidden" id="subnav-production">
+  <button data-tab="production" data-inv="orders" class="active" onclick="showTab('production','orders')">أوامر الإنتاج</button>
+  <button data-tab="production" data-inv="models" onclick="showTab('production','models')">الموديلات</button>
+</div>
+<div class="subnav hidden" id="subnav-settings">
+  <button data-tab="settings" class="active" onclick="showTab('settings')">الإعدادات</button>
+  <button data-tab="defs" onclick="showTab('defs')">التعريفات</button>
+  <button data-tab="import" class="admin-only" onclick="showTab('import')">الاستيراد</button>
+</div>
+<main class="hidden" id="app-main">
+  <!-- inventory (coming soon) -->
+  <section id="tab-inventory" class="hidden">
+    <div class="panel">
+      <h2 id="inv-title">المخزن</h2>
+      <p class="muted">قسم المخزن هيشتغل في التحديث الجاي: خامات ونعال وجلد ومخزون جاهز، مع استيراد بياناتك الحالية من MeDo تلقائياً.</p>
+    </div>
+  </section>
+  <!-- production (coming soon) -->
+  <section id="tab-production" class="hidden">
+    <div class="panel">
+      <h2 id="prod-title">الإنتاج</h2>
+      <p class="muted">قسم الإنتاج هيشتغل في التحديث الجاي: موديلات وأوامر إنتاج ومتابعة مراحل التصنيع، مع استيراد بياناتك الحالية من MeDo تلقائياً.</p>
+    </div>
+  </section>
+
+  <!-- master data -->
+  <section id="tab-defs" class="hidden">
+    <div class="cards">
+      <div class="panel">
+        <h2>عميل جديد</h2>
+        <input id="dc-name" placeholder="اسم العميل">
+        <input id="dc-phone" placeholder="التليفون">
+        <input id="dc-address" placeholder="العنوان">
+        <button onclick="addDefCustomer('customer')">إضافة العميل</button>
+      </div>
+      <div class="panel">
+        <h2>مورد جديد</h2>
+        <input id="ds-name" placeholder="اسم المورد">
+        <input id="ds-phone" placeholder="التليفون">
+        <input id="ds-address" placeholder="العنوان">
+        <button onclick="addDefCustomer('supplier')">إضافة المورد</button>
+      </div>
+      <div class="panel">
+        <h2>موظف جديد</h2>
+        <input id="de-name" placeholder="اسم الموظف">
+        <input id="de-role" placeholder="الوظيفة">
+        <input id="de-phone" placeholder="التليفون">
+        <input id="de-start" type="date">
+        <input id="de-notes" placeholder="ملاحظات">
+        <button onclick="addEmployee()">إضافة الموظف</button>
+      </div>
+      <div class="panel">
+        <h2>الأصناف</h2>
+        <p class="muted">تعريف الأصناف (خامات ونعال وموديلات) هييجي مع قسم المخزن في التحديث الجاي.</p>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>الموظفون</h2>
+      <table><thead><tr><th>الاسم</th><th>الوظيفة</th><th>التليفون</th><th>تاريخ البداية</th><th>ملاحظات</th><th>الحالة</th><th></th></tr></thead>
+      <tbody id="employees-body"></tbody></table>
+    </div>
+  </section>
+  <!-- dashboard -->
+  <section id="tab-dash">
+    <div class="cards" id="dash-cards"></div>
+    <div class="panel warn2" id="dash-alerts-panel">
+      <h2>تنبيهات</h2>
+      <div id="dash-alerts"></div>
+    </div>
+    <div class="panel">
+      <h2>أعلى العملاء مديونية</h2>
+      <div id="dash-debtors"></div>
+    </div>
+    <div class="panel">
+      <h2>أعلى الموردين مستحقات <span class="sub">مبالغ مستحقة لهم علينا</span></h2>
+      <div id="dash-creditors"></div>
+    </div>
+  </section>
+
+  <!-- accounts (customers / suppliers) -->
+  <section id="tab-accounts" class="hidden">
+    <div class="panel">
+      <h2 id="cust-form-title">إضافة</h2>
+      <input type="hidden" id="c-id">
+      <div class="row">
+        <div class="field"><label>الاسم *</label><input id="c-name" style="width:180px"></div>
+        <div class="field"><label>الكود</label><input id="c-code" class="num" style="width:80px"></div>
+        <div class="field"><label>التليفون</label><input id="c-phone" class="num" style="width:130px"></div>
+        <div class="field"><label>العنوان</label><input id="c-address" style="width:160px"></div>
+        <div class="field"><label>المجموعة/الفئة</label><input id="c-group" style="width:120px"></div>
+      </div>
+      <div class="row">
+        <div class="field cust-only"><label>خصم %</label><input id="c-disc" type="number" step="0.5" class="num" style="width:80px"></div>
+        <div class="field cust-only"><label>حد الائتمان</label><input id="c-limit" type="number" min="0" step="100" class="num" style="width:110px"></div>
+        <div class="field"><label>رصيد افتتاحي</label><input id="c-opening" type="number" step="0.01" class="num" style="width:110px"></div>
+        <div class="field"><label>تاريخ الرصيد</label><input id="c-opening-date" type="date"></div>
+        <div class="field"><label>ملاحظات</label><input id="c-notes" style="width:180px"></div>
+        <button onclick="saveCustomer()">حفظ</button>
+        <button class="ghost" onclick="resetCustomerForm()">جديد</button>
+      </div>
+    </div>
+    <div class="panel">
+      <h2 id="cust-list-title">العملاء</h2>
+      <input class="search" id="cust-search" placeholder="بحث سريع..." oninput="filterTable('cust-table',this.value)">
+      <table id="cust-table"><thead><tr>
+        <th>الكود</th><th>الاسم</th><th>تليفون</th><th>مجموعة</th><th>خصم%</th><th>الرصيد</th><th></th>
+      </tr></thead><tbody></tbody></table>
+    </div>
+  </section>
+
+  <!-- invoice -->
+  <section id="tab-invoice" class="hidden">
+    <div class="panel">
+      <h2>فاتورة / مرتجع</h2>
+      <div class="row">
+        <div class="field"><label>النوع</label><select id="i-kind" onchange="onInvoiceKind()">
+          <option value="sale">فاتورة بيع</option><option value="return">مرتجع بيع</option>
+          <option value="purchase">فاتورة شراء</option><option value="purchase_return">مرتجع شراء</option>
+        </select></div>
+        <div class="field"><label id="i-party-label">العميل *</label><select id="i-customer" style="width:220px" onchange="onInvoiceCustomer()"></select></div>
+        <div class="field"><label>التاريخ</label><input id="i-date" type="date"></div>
+      </div>
+      <table class="items-table"><thead><tr>
+        <th style="width:40%">الصنف</th><th>اللون</th><th>أزواج</th><th>سعر الزوج</th><th>الإجمالي</th><th></th>
+      </tr></thead><tbody id="i-items"></tbody></table>
+      <div style="margin:8px 0"><button class="small" onclick="addItemRow()">+ سطر صنف</button></div>
+      <div class="row">
+        <div class="field"><label>شحن</label><input id="i-shipping" type="number" step="0.01" class="num" style="width:100px" value="0" oninput="calcInvoice()"></div>
+        <div class="field"><label>مصاريف أخرى</label><input id="i-other" type="number" step="0.01" class="num" style="width:100px" value="0" oninput="calcInvoice()"></div>
+        <div class="field"><label>خصم (مبلغ)</label><input id="i-discount" type="number" step="0.01" class="num" style="width:100px" value="0" oninput="calcInvoice()"></div>
+        <div class="field"><label>ملاحظات</label><input id="i-notes" style="width:220px"></div>
+      </div>
+      <div class="totals">
+        <span>الأصناف: <b id="i-items-total" class="num">0</b></span>
+        <span>الأزواج: <b id="i-pairs" class="num">0</b></span>
+        <span>الصافي: <b id="i-net" class="num">0</b> جنيه</span>
+      </div>
+      <div style="margin-top:12px;display:flex;gap:8px">
+        <button onclick="saveInvoice(false)">حفظ</button>
+        <button class="ghost" onclick="saveInvoice(true)">حفظ وطباعة</button>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>آخر الفواتير</h2>
+      <input class="search" id="inv-search" placeholder="بحث سريع..." oninput="filterTable('inv-table',this.value)">
+      <table id="inv-table"><thead><tr>
+        <th>رقم</th><th>التاريخ</th><th>الطرف</th><th>النوع</th><th>أزواج</th><th>الصافي</th><th></th>
+      </tr></thead><tbody></tbody></table>
+    </div>
+  </section>
+
+  <!-- payments -->
+  <section id="tab-payments" class="hidden">
+    <div class="panel">
+      <h2>تسجيل دفعة <span class="sub" id="p-dir-label"></span></h2>
+      <div class="row">
+        <div class="field"><label>الطرف *</label><select id="p-customer" style="width:220px" onchange="onPaymentParty()"></select></div>
+        <div class="field"><label>التاريخ</label><input id="p-date" type="date"></div>
+        <div class="field"><label>كاش</label><input id="p-cash" type="number" min="0" step="0.01" class="num" style="width:110px" value="0"></div>
+        <div class="field"><label>شبكة</label><input id="p-card" type="number" min="0" step="0.01" class="num" style="width:110px" value="0"></div>
+        <div class="field"><label>تحويل</label><input id="p-transfer" type="number" min="0" step="0.01" class="num" style="width:110px" value="0"></div>
+        <div class="field"><label>ملاحظات</label><input id="p-notes" style="width:180px"></div>
+        <button onclick="savePayment()">حفظ الدفعة</button>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>آخر الدفعات</h2>
+      <input class="search" id="pay-search" placeholder="بحث سريع..." oninput="filterTable('pay-table',this.value)">
+      <table id="pay-table"><thead><tr>
+        <th>التاريخ</th><th>الطرف</th><th>النوع</th><th>كاش</th><th>شبكة</th><th>تحويل</th><th>الإجمالي</th><th>ملاحظات</th><th></th>
+      </tr></thead><tbody></tbody></table>
+    </div>
+  </section>
+
+  <!-- statement -->
+  <section id="tab-statement" class="hidden">
+    <div class="panel">
+      <div class="row">
+        <div class="field"><label>العميل / المورد</label><select id="s-customer" style="width:240px" onchange="loadStatement()"></select></div>
+        <button class="ghost" onclick="printStatement()">طباعة الكشف</button>
+        <span class="muted">لحفظ PDF: من نافذة الطباعة اختر "حفظ كـ PDF"</span>
+      </div>
+      <div class="cards" id="s-cards"></div>
+      <table id="s-table"><thead><tr>
+        <th>التاريخ</th><th>البيان</th><th>مدين</th><th>دائن</th><th>الرصيد</th>
+      </tr></thead><tbody></tbody></table>
+    </div>
+  </section>
+
+  <!-- import (admin) -->
+  <section id="tab-import" class="hidden">
+    <div class="panel">
+      <h2>استيراد من MeDo (ملف JSON)</h2>
+      <p class="muted">يجيب العملاء (بخصوماتهم وحدود ائتهم) والموردين (بأرصدتهم الافتتاحية) من ملف التصدير. أرصدة العملاء الافتتاحية تدخلها من الكارت اللي تحته.</p>
+      <div class="row">
+        <input type="file" id="medo-file" accept=".json">
+        <button onclick="medoPreview()">معاينة</button>
+        <button class="ghost hidden" id="medo-run" onclick="medoRun()">تنفيذ الاستيراد</button>
+      </div>
+      <div id="medo-result" class="muted"></div>
+    </div>
+    <div class="panel">
+      <h2>استيراد أرصدة وكشوف MeDo (ملفات CSV الرسمية)</h2>
+      <p class="muted">ملف الأرصدة يحدّث بيانات العملاء وأرصدتهم الافتتاحية. ملف الكشوف يضيف سجل الحركات كاملًا؛ وأي فرق بين مجموع الحركات والرصيد الرسمي يظهر كسطر "رصيد افتتاحي" مصحِّح ويُعرض في تقرير الفروق.</p>
+      <div class="row">
+        <div class="field"><label>ملف الأرصدة (CSV)</label><input type="file" id="mf-bal" accept=".csv,.txt"></div>
+        <div class="field"><label>ملف الكشوف (CSV)</label><input type="file" id="mf-st" accept=".csv,.txt"></div>
+        <button onclick="mfPreview()">معاينة</button>
+        <button class="ghost hidden" id="mf-run" onclick="mfRun()">تنفيذ الاستيراد</button>
+      </div>
+      <div id="mf-result" class="muted"></div>
+    </div>
+    <div class="panel">
+      <h2>استيراد من Excel / CSV</h2>
+      <p class="muted">للأرصدة الافتتاحية أو قوائم العملاء/الموردين. لو الاسم موجود بالفعل يتحدث رصيده الافتتاحي فقط (ممنوع التكرار).</p>
+      <div class="row">
+        <div class="field"><label>النوع</label><select id="imp-kind"><option value="customer">عملاء</option><option value="supplier">موردون</option></select></div>
+        <input type="file" id="imp-file" accept=".csv,.xlsx,.txt">
+        <button onclick="impPreview()">معاينة وتعيين الأعمدة</button>
+      </div>
+      <div id="imp-map" class="hidden"></div>
+      <div id="imp-result" class="muted"></div>
+    </div>
+  </section>
+
+  <!-- settings (admin) -->
+  <section id="tab-settings" class="hidden">
+    <div class="panel">
+      <h2>بيانات الشركة (تظهر في الطباعة)</h2>
+      <div class="row">
+        <div class="field"><label>اسم الشركة</label><input id="set-name" style="width:260px"></div>
+        <div class="field"><label>تليفون</label><input id="set-phone" class="num" style="width:160px"></div>
+        <div class="field"><label>العنوان</label><input id="set-address" style="width:260px"></div>
+      </div>
+      <div class="row">
+        <div class="field"><label>تنبيه الديون بعد (يوم)</label><input id="set-alert-days" type="number" min="1" class="num" style="width:90px"></div>
+        <div class="field"><label>فولدر النسخ الاحتياطي اليومي (اتركه فاضي = فولدر backups)</label><input id="set-backup-dir" style="width:320px" placeholder="مثال: D:\NixtBackups"></div>
+        <button onclick="saveSettings()">حفظ الإعدادات</button>
+      </div>
+      <div class="muted" id="set-backup-info"></div>
+    </div>
+    <div class="panel">
+      <h2>المستخدمون</h2>
+      <div class="row">
+        <div class="field"><label>اسم مستخدم جديد</label><input id="u-name" style="width:160px"></div>
+        <div class="field"><label>كلمة سر</label><input id="u-pass" type="password" style="width:140px"></div>
+        <div class="field"><label>الصلاحية</label><select id="u-role"><option value="user">مستخدم</option><option value="admin">مدير</option></select></div>
+        <button onclick="addUser()">إضافة</button>
+      </div>
+      <table id="users-table"><thead><tr><th>المستخدم</th><th>الصلاحية</th><th></th></tr></thead><tbody></tbody></table>
+      <p class="muted">المستخدم: شغل يومي كامل بدون حذف أو إعدادات أو استيراد. المدير: كل شيء. لو نسيت كلمات السر كلها شغّل ملف "استعادة-الدخول.bat".</p>
+    </div>
+    <div class="panel">
+      <h2>تغيير كلمة السر بتاعتي</h2>
+      <div class="row">
+        <div class="field"><label>الحالية</label><input id="pw-old" type="password" style="width:150px"></div>
+        <div class="field"><label>الجديدة</label><input id="pw-new" type="password" style="width:150px"></div>
+        <button onclick="changePassword()">تغيير</button>
+      </div>
+    </div>
+  </section>
+</main>
+
+<!-- update modal -->
+<div class="modal-bg" id="update-modal">
+  <div class="modal">
+    <h3>تحديث النظام</h3>
+    <div id="update-status" class="muted">جارٍ الفحص...</div>
+    <div style="margin-top:14px;display:flex;gap:8px;justify-content:flex-end">
+      <button class="ghost" onclick="closeUpdate()">إغلاق</button>
+      <button id="update-btn" class="hidden" onclick="runUpdate()">تحميل وتثبيت التحديث</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<div id="print-area"></div>
+<script>
+let customers = [];   // all parties
+let currentUser = null;
+let partyKind = 'customer';
+const fmt = n => (Number(n)||0).toLocaleString('en-US',{maximumFractionDigits:2});
+const today = () => new Date().toISOString().slice(0,10);
+const v = id => document.getElementById(id).value.trim();
+const esc = s => String(s??'').replace(/[&<>"]/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
+const KIND_LABEL = {sale:'فاتورة بيع',return:'مرتجع بيع',purchase:'فاتورة شراء',purchase_return:'مرتجع شراء'};
+const KIND_PARTY = {sale:'customer',return:'customer',purchase:'supplier',purchase_return:'supplier'};
+function toast(msg, bad){
+  const t=document.getElementById('toast');
+  t.textContent=msg; t.style.background=bad?'#b91c1c':'#111827'; t.style.display='block';
+  setTimeout(()=>t.style.display='none',3500);
+}
+async function api(path, opts){
+  const r = await fetch(path, opts);
+  if(r.status===401){ showLogin(); throw new Error('login'); }
+  const j = await r.json();
+  if(!r.ok){ throw new Error(j.error||'خطأ'); }
+  return j;
+}
+function filterTable(tid, q){
+  q=q.trim();
+  document.querySelectorAll('#'+tid+' tbody tr').forEach(tr=>{
+    tr.style.display = !q || tr.textContent.includes(q) ? '' : 'none';
+  });
+}
+
+/* ---------- auth ---------- */
+function showLogin(){
+  document.getElementById('login-screen').style.display='flex';
+  document.getElementById('app-header').classList.add('hidden');
+  document.getElementById('app-main').classList.add('hidden');
+  for(const x of ['accounts','inventory','production','settings'])
+    document.getElementById('subnav-'+x).classList.add('hidden');
+}
+function showApp(){
+  document.getElementById('login-screen').style.display='none';
+  document.getElementById('app-header').classList.remove('hidden');
+  document.getElementById('app-main').classList.remove('hidden');
+  const admin = currentUser && currentUser.role==='admin';
+  document.querySelectorAll('.admin-only').forEach(b=>b.classList.toggle('hidden',!admin));
+  document.getElementById('who').textContent = currentUser.username + (admin?' (مدير)':'');
+}
+async function bootAuth(){
+  const me = await api('/api/me');
+  document.getElementById('app-ver').textContent='إصدار '+me.version;
+  if(me.needs_setup){
+    document.getElementById('setup-form').classList.remove('hidden');
+    return;
+  }
+  if(!me.logged_in){
+    document.getElementById('login-form').classList.remove('hidden');
+    return;
+  }
+  currentUser = {username:me.username, role:me.role};
+  showApp();
+}
+async function doSetup(){
+  const u=v('su-username'), p1=document.getElementById('su-password').value, p2=document.getElementById('su-password2').value;
+  if(p1!==p2){ document.getElementById('login-err').textContent='كلمتا السر غير متطابقتين'; return; }
+  try{
+    const r=await api('/api/setup',{method:'POST',body:JSON.stringify({username:u,password:p1})});
+    currentUser={username:u,role:'admin'}; showApp(); bootData();
+  }catch(e){ document.getElementById('login-err').textContent=e.message; }
+}
+async function doLogin(){
+  try{
+    const r=await api('/api/login',{method:'POST',body:JSON.stringify({username:v('li-username'),password:document.getElementById('li-password').value})});
+    currentUser={username:r.username,role:r.role}; showApp(); bootData();
+  }catch(e){ document.getElementById('login-err').textContent=e.message; }
+}
+async function doLogout(){
+  await api('/api/logout',{method:'POST',body:'{}'});
+  location.reload();
+}
+
+/* ---------- nav ---------- */
+const TAB_SEC = {dash:'accounts',accounts:'accounts',invoice:'accounts',payments:'accounts',statement:'accounts',inventory:'inventory',production:'production',settings:'settings',import:'settings',defs:'settings'};
+const INV_TITLES = {materials:'المخزن - الخامات',soles:'المخزن - النعال',leather:'المخزن - الجلد (باكو)',ready:'المخزن - المخزون الجاهز',orders:'الإنتاج - أوامر الإنتاج',models:'الإنتاج - الموديلات'};
+function showSection(sec){
+  showTab(sec==='settings'?'settings':sec==='inventory'?'inventory':sec==='production'?'production':'dash');
+}
+function showTab(t, kind){
+  document.querySelectorAll('main > section').forEach(s=>s.classList.add('hidden'));
+  document.getElementById('tab-'+t).classList.remove('hidden');
+  const sec = TAB_SEC[t]||'accounts';
+  document.querySelectorAll('#nav button').forEach(b=>b.classList.toggle('active', b.dataset.sec===sec));
+  for(const x of ['accounts','inventory','production','settings'])
+    document.getElementById('subnav-'+x).classList.toggle('hidden', sec!==x);
+  if(t==='inventory' || t==='production'){
+    const sub = kind || (t==='inventory'?'materials':'orders');
+    document.querySelectorAll('#subnav-'+t+' button').forEach(b=>b.classList.toggle('active', b.dataset.inv===sub));
+    const ttl = document.getElementById(t==='inventory'?'inv-title':'prod-title');
+    if(ttl) ttl.textContent = INV_TITLES[sub]||ttl.textContent;
+  }
+  if(t==='accounts' && kind) partyKind = kind;
+  document.querySelectorAll('#subnav-accounts button').forEach(b=>b.classList.toggle('active',
+    b.dataset.tab===t && (t!=='accounts' || b.dataset.kind===partyKind)));
+  document.querySelectorAll('#subnav-settings button').forEach(b=>b.classList.toggle('active', b.dataset.tab===t));
+  if(t==='dash') loadDash();
+  if(t==='accounts') setPartyKind(partyKind);
+  if(t==='invoice') loadInvoices();
+  if(t==='payments') loadPayments();
+  if(t==='settings') loadSettings();
+  if(t==='defs') loadEmployees();
+}
+function setPartyKind(k){
+  partyKind=k;
+  document.querySelectorAll('#subnav-accounts button[data-tab="accounts"]').forEach(b=>b.classList.toggle('active', b.dataset.kind===k));
+  document.querySelectorAll('.cust-only').forEach(el=>el.style.display=(k==='customer')?'':'none');
+  resetCustomerForm();
+  loadCustomers();
+}
+
+/* ---------- shared ---------- */
+async function refreshCustomers(){
+  customers = await api('/api/customers');
+  const mk = list => list.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('');
+  const all = '<option value="">-- اختر --</option>'+mk(customers);
+  for(const id of ['p-customer','s-customer']){
+    const el=document.getElementById(id); const vv=el.value;
+    el.innerHTML=all; el.value=vv;
+  }
+  fillInvoiceParties();
+}
+function fillInvoiceParties(){
+  const kind = KIND_PARTY[document.getElementById('i-kind').value] || 'customer';
+  const list = customers.filter(c=>(c.kind||'customer')===kind);
+  const el=document.getElementById('i-customer'); const vv=el.value;
+  el.innerHTML='<option value="">-- اختر --</option>'+list.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('');
+  el.value=vv;
+  document.getElementById('i-party-label').textContent = kind==='supplier'?'المورد *':'العميل *';
+}
+function onInvoiceKind(){ fillInvoiceParties(); calcInvoice(); }
+
+/* ---------- dashboard ---------- */
+async function loadDash(){
+  const d = await api('/api/dashboard');
+  document.getElementById('dash-cards').innerHTML = [
+    ['المبيعات', fmt(d.customer.sales)],['المحصل من العملاء', fmt(d.customer.paid)],
+    ['مرتجعات البيع', fmt(d.customer.returns)],['متبقي على العملاء', fmt(d.customer.remaining)],
+    ['مشتريات', fmt(d.supplier.sales)],['مدفوع للموردين', fmt(d.supplier.paid)],
+    ['مستحق للموردين', fmt(d.supplier.remaining)],['الأزواج المباعة', fmt(d.pairs)],
+  ].map(([t,x])=>`<div class="card"><div class="t">${t}</div><div class="v num">${x}</div></div>`).join('');
+  const al=d.alerts||{over_limit:[],stale:[]};
+  let ah='';
+  al.over_limit.forEach(x=>{ah+=`<li class="bad">⚠ ${esc(x.name)} عدّى حد الائتمان: عليه <b class="num">${fmt(x.balance)}</b> والحد <span class="num">${fmt(x.limit)}</span> <button class="small" onclick="openStatement(${x.id})">كشف</button></li>`;});
+  al.stale.forEach(x=>{ah+=`<li>🕐 ${esc(x.name)} عليه <b class="num">${fmt(x.balance)}</b> وآخر حركة منذ <span class="num">${x.days}</span> يوم <button class="small" onclick="openStatement(${x.id})">كشف</button></li>`;});
+  document.getElementById('dash-alerts').innerHTML = ah ? `<ul class="alert-list">${ah}</ul>` : '<span class="muted">لا توجد تنبيهات.</span>';
+  const rows = d.debtors.map(x=>`<tr><td>${esc(x.name)}</td><td class="num bad">${fmt(x.balance)}</td>
+    <td><button class="small" onclick="openStatement(${x.id})">كشف</button></td></tr>`).join('');
+  document.getElementById('dash-debtors').innerHTML = d.debtors.length
+    ? `<table><thead><tr><th>العميل</th><th>المتبقي عليه</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
+    : '<span class="muted">لا يوجد مديونيات.</span>';
+  const rows2 = d.creditors.map(x=>`<tr><td>${esc(x.name)}</td><td class="num bad">${fmt(x.balance)}</td>
+    <td><button class="small" onclick="openStatement(${x.id})">كشف</button></td></tr>`).join('');
+  document.getElementById('dash-creditors').innerHTML = d.creditors.length
+    ? `<table><thead><tr><th>المورد</th><th>مستحق له</th><th></th></tr></thead><tbody>${rows2}</tbody></table>`
+    : '<span class="muted">لا توجد مستحقات للموردين.</span>';
+}
+
+/* ---------- accounts (parties) ---------- */
+async function loadCustomers(){
+  await refreshCustomers();
+  const list = customers.filter(c=>(c.kind||'customer')===partyKind);
+  document.getElementById('cust-list-title').textContent = partyKind==='supplier'?'الموردون':'العملاء';
+  const balLabel = partyKind==='supplier'?'مستحق له':'المتبقي عليه';
+  document.querySelector('#cust-table thead tr').children[5].textContent = balLabel;
+  document.querySelector('#cust-table tbody').innerHTML = list.map(c=>`<tr>
+    <td class="num">${esc(c.code||'')}</td><td>${esc(c.name)}</td><td class="num">${esc(c.phone)}</td>
+    <td>${esc(c.group_name)}</td><td class="num">${c.discount_pct||0}</td>
+    <td class="num ${c.balance>0?'bad':'ok'}">${fmt(c.balance)}</td>
+    <td style="white-space:nowrap">
+      <button class="small" onclick="openStatement(${c.id})">كشف</button>
+      <button class="small ghost" onclick="editCustomer(${c.id})">تعديل</button>
+      <button class="small danger admin-only" ${currentUser.role!=='admin'?'style="display:none"':''} onclick="delCustomer(${c.id})">حذف</button>
+    </td></tr>`).join('');
+  filterTable('cust-table', document.getElementById('cust-search').value);
+}
+function resetCustomerForm(){
+  document.getElementById('cust-form-title').textContent = partyKind==='supplier'?'إضافة مورد':'إضافة عميل';
+  for(const id of ['c-id','c-name','c-code','c-phone','c-address','c-group','c-disc','c-limit','c-opening','c-opening-date','c-notes'])
+    document.getElementById(id).value='';
+}
+async function saveCustomer(){
+  const id = v('c-id');
+  const body = {name:v('c-name'), phone:v('c-phone'), group_name:v('c-group'), discount_pct:v('c-disc')||0,
+    notes:v('c-notes'), kind:partyKind, code:v('c-code'), address:v('c-address'),
+    credit_limit:v('c-limit')||0, opening:v('c-opening')||0, opening_date:v('c-opening-date')};
+  if(!body.name){ toast('اكتب الاسم', true); return; }
+  try{
+    if(id) await api('/api/customers/'+id, {method:'POST', body:JSON.stringify(body)});
+    else await api('/api/customers', {method:'POST', body:JSON.stringify(body)});
+    toast('تم الحفظ'); resetCustomerForm(); loadCustomers();
+  }catch(e){ toast(e.message, true); }
+}
+function editCustomer(id){
+  const c = customers.find(x=>x.id===id); if(!c) return;
+  document.getElementById('cust-form-title').textContent='تعديل بيانات';
+  document.getElementById('c-id').value=c.id;
+  document.getElementById('c-name').value=c.name;
+  document.getElementById('c-code').value=c.code||'';
+  document.getElementById('c-phone').value=c.phone||'';
+  document.getElementById('c-address').value=c.address||'';
+  document.getElementById('c-group').value=c.group_name||'';
+  document.getElementById('c-disc').value=c.discount_pct||0;
+  document.getElementById('c-limit').value=c.credit_limit||0;
+  document.getElementById('c-opening').value=c.opening||0;
+  document.getElementById('c-opening-date').value=c.opening_date||'';
+  document.getElementById('c-notes').value=c.notes||'';
+}
+async function delCustomer(id){
+  if(!confirm('حذف؟ (لا يمكن حذف من له فواتير أو دفعات)')) return;
+  try{ await api('/api/customers/'+id,{method:'DELETE'}); toast('تم الحذف'); loadCustomers(); }
+  catch(e){ toast('لا يمكن الحذف: له فواتير أو دفعات مسجلة', true); }
+}
+
+/* ---------- invoices ---------- */
+function addItemRow(it){
+  it = it||{};
+  const tr = document.createElement('tr');
+  tr.innerHTML = `<td><input class="it-name" value="${esc(it.item_name||'')}"></td>
+    <td><input class="it-color" value="${esc(it.color||'')}"></td>
+    <td><input class="it-pairs num" type="number" min="0" step="1" value="${it.pairs??''}" oninput="calcInvoice()"></td>
+    <td><input class="it-price num" type="number" min="0" step="0.01" value="${it.price??''}" oninput="calcInvoice()"></td>
+    <td class="it-total num">0</td>
+    <td><button class="small danger" onclick="this.closest('tr').remove();calcInvoice()">×</button></td>`;
+  document.getElementById('i-items').appendChild(tr);
+}
+function readItems(){
+  const items=[]; let total=0, pairs=0;
+  document.querySelectorAll('#i-items tr').forEach(tr=>{
+    const name=tr.querySelector('.it-name').value.trim();
+    const p=parseFloat(tr.querySelector('.it-pairs').value)||0;
+    const pr=parseFloat(tr.querySelector('.it-price').value)||0;
+    const t=p*pr; tr.querySelector('.it-total').textContent=fmt(t);
+    if(name){ items.push({item_name:name,color:tr.querySelector('.it-color').value.trim(),pairs:p,price:pr}); total+=t; pairs+=p; }
+  });
+  return {items,total,pairs};
+}
+function calcInvoice(){
+  const {total,pairs}=readItems();
+  const ship=parseFloat(v('i-shipping'))||0, other=parseFloat(v('i-other'))||0, disc=parseFloat(v('i-discount'))||0;
+  document.getElementById('i-items-total').textContent=fmt(total);
+  document.getElementById('i-pairs').textContent=fmt(pairs);
+  document.getElementById('i-net').textContent=fmt(total+ship+other-disc);
+}
+function onInvoiceCustomer(){
+  const c = customers.find(x=>x.id==v('i-customer'));
+  if(c && c.discount_pct && KIND_PARTY[document.getElementById('i-kind').value]==='customer'){
+    const {total}=readItems();
+    document.getElementById('i-discount').value=(total*c.discount_pct/100).toFixed(2);
+  }
+  calcInvoice();
+}
+async function saveInvoice(andPrint){
+  const cid=v('i-customer'); if(!cid){toast('اختر الطرف أولاً',true);return;}
+  const {items}=readItems(); if(!items.length){toast('أضف صنفاً واحداً على الأقل',true);return;}
+  const kind=document.getElementById('i-kind').value;
+  const body={customer_id:+cid, date:v('i-date')||today(), kind,
+    shipping:v('i-shipping')||0, other_charges:v('i-other')||0, discount:v('i-discount')||0,
+    notes:v('i-notes'), items};
+  try{
+    const r=await api('/api/invoices',{method:'POST',body:JSON.stringify(body)});
+    toast('تم حفظ '+KIND_LABEL[kind]+' رقم '+r.id);
+    resetInvoiceForm(); loadInvoices(); refreshCustomers();
+    if(andPrint) printInvoice(r.id);
+  }catch(e){toast(e.message,true);}
+}
+function resetInvoiceForm(){
+  document.getElementById('i-items').innerHTML=''; addItemRow();
+  for(const id of ['i-shipping','i-other','i-discount']) document.getElementById(id).value=0;
+  document.getElementById('i-notes').value=''; calcInvoice();
+}
+async function loadInvoices(){
+  await refreshCustomers();
+  const invs=await api('/api/invoices');
+  document.querySelector('#inv-table tbody').innerHTML=invs.slice(0,80).map(i=>`<tr>
+    <td class="num">${i.id}</td><td class="num">${i.date}</td><td>${esc(i.customer_name)}</td>
+    <td>${(i.kind==='return'||i.kind==='purchase_return')?'<span class="bad">'+KIND_LABEL[i.kind]+'</span>':KIND_LABEL[i.kind]||i.kind}</td>
+    <td class="num">${fmt(i.pairs)}</td><td class="num">${fmt(i.net)}</td>
+    <td style="white-space:nowrap"><button class="small" onclick="printInvoice(${i.id})">طباعة</button>
+    <button class="small danger" ${currentUser.role!=='admin'?'style="display:none"':''} onclick="delInvoice(${i.id})">حذف</button></td></tr>`).join('');
+  filterTable('inv-table', document.getElementById('inv-search').value);
+}
+async function delInvoice(id){
+  if(!confirm('حذف الفاتورة رقم '+id+'؟')) return;
+  await api('/api/invoices/'+id,{method:'DELETE'}); toast('تم الحذف'); loadInvoices();
+}
+function companyHeader(co, title){
+  return `<div class="dochead">
+    <img src="/static/logo.png" alt="NIXT">
+    <div><b>${esc(co.company_name||'')}</b><div class="co">
+    ${co.company_phone?'تليفون: <span class="num">'+esc(co.company_phone)+'</span>':''}
+    ${co.company_address?' — '+esc(co.company_address):''}</div></div>
+    <div style="margin-right:auto;text-align:left"><b>${title}</b></div>
+  </div>`;
+}
+async function printInvoice(id){
+  const i=await api('/api/invoices/'+id);
+  const isRet=i.kind==='return'||i.kind==='purchase_return';
+  const partyLabel = (i.customer&&i.customer.kind==='supplier')?'المورد':'العميل';
+  const rows=i.items.map((x,n)=>`<tr><td class="num">${n+1}</td><td>${esc(x.item_name)}</td><td>${esc(x.color)}</td>
+    <td class="num">${fmt(x.pairs)}</td><td class="num">${fmt(x.price)}</td><td class="num">${fmt(x.pairs*x.price)}</td></tr>`).join('');
+  showPrint(`<div class="doc">
+    ${companyHeader(i.company||{}, (KIND_LABEL[i.kind]||'فاتورة')+' رقم '+i.id)}
+    <div class="sub">التاريخ: <span class="num">${i.date}</span></div>
+    <div>${partyLabel}: <b>${esc(i.customer?i.customer.name:'')}</b>
+      ${i.customer&&i.customer.phone?' — تليفون: <span class="num">'+esc(i.customer.phone)+'</span>':''}</div>
+    <table><thead><tr><th>م</th><th>الصنف</th><th>اللون</th><th>أزواج</th><th>سعر الزوج</th><th>الإجمالي</th></tr></thead>
+    <tbody>${rows}</tbody></table>
+    <table style="width:55%;margin-right:auto">
+      <tr><td>إجمالي الأصناف</td><td class="num">${fmt(i.items_total)}</td></tr>
+      <tr><td>شحن</td><td class="num">${fmt(i.shipping)}</td></tr>
+      <tr><td>مصاريف أخرى</td><td class="num">${fmt(i.other_charges)}</td></tr>
+      <tr><td>خصم</td><td class="num">-${fmt(i.discount)}</td></tr>
+      <tr><td><b>الصافي</b></td><td class="num"><b>${fmt(i.net)}</b></td></tr>
+    </table>
+    ${i.notes?'<div>ملاحظات: '+esc(i.notes)+'</div>':''}
+    <div class="sig"><span>توقيع المستلم: ................</span><span>توقيع المحاسب: ................</span></div>
+  </div>`);
+}
+
+/* ---------- payments ---------- */
+function onPaymentParty(){
+  const c = customers.find(x=>x.id==v('p-customer'));
+  document.getElementById('p-dir-label').textContent =
+    c && c.kind==='supplier' ? 'دفع للمورد' : c ? 'قبض من العميل' : '';
+}
+async function loadPayments(){
+  await refreshCustomers();
+  const pays=await api('/api/payments');
+  document.querySelector('#pay-table tbody').innerHTML=pays.slice(0,80).map(p=>`<tr>
+    <td class="num">${p.date}</td><td>${esc(p.customer_name)}</td>
+    <td>${p.party_kind==='supplier'?'دفع لمورد':'قبض'}</td>
+    <td class="num">${fmt(p.cash)}</td><td class="num">${fmt(p.card)}</td><td class="num">${fmt(p.transfer)}</td>
+    <td class="num"><b>${fmt(p.total)}</b></td><td>${esc(p.notes)}</td>
+    <td><button class="small danger" ${currentUser.role!=='admin'?'style="display:none"':''} onclick="delPayment(${p.id})">حذف</button></td></tr>`).join('');
+  filterTable('pay-table', document.getElementById('pay-search').value);
+}
+async function savePayment(){
+  const cid=v('p-customer'); if(!cid){toast('اختر الطرف أولاً',true);return;}
+  const body={customer_id:+cid,date:v('p-date')||today(),cash:v('p-cash')||0,card:v('p-card')||0,transfer:v('p-transfer')||0,notes:v('p-notes')};
+  if(!(+body.cash||+body.card||+body.transfer)){toast('اكتب مبلغ الدفعة',true);return;}
+  try{
+    await api('/api/payments',{method:'POST',body:JSON.stringify(body)});
+    toast('تم حفظ الدفعة');
+    for(const id of ['p-cash','p-card','p-transfer']) document.getElementById(id).value=0;
+    document.getElementById('p-notes').value='';
+    loadPayments();
+  }catch(e){toast(e.message,true);}
+}
+async function delPayment(id){
+  if(!confirm('حذف الدفعة رقم '+id+'؟')) return;
+  await api('/api/payments/'+id,{method:'DELETE'}); toast('تم الحذف'); loadPayments();
+}
+
+/* ---------- statement ---------- */
+let lastStatement=null;
+function openStatement(cid){ showTab('statement'); document.getElementById('s-customer').value=cid; loadStatement(); }
+async function loadStatement(){
+  const cid=v('s-customer'); if(!cid) return;
+  const s=await api('/api/statement?customer_id='+cid);
+  lastStatement=s;
+  const isSup = s.customer && s.customer.kind==='supplier';
+  document.getElementById('s-cards').innerHTML=[
+    [isSup?'المشتريات':'المبيعات',fmt(s.summary.sales)],[isSup?'المدفوع للمورد':'المحصل',fmt(s.summary.paid)],
+    ['المرتجعات',fmt(s.summary.returns)],[isSup?'مستحق له':'المتبقي عليه',fmt(s.summary.remaining)],
+    ['الأزواج',fmt(s.summary.pairs)],
+  ].map(([t,x])=>`<div class="card"><div class="t">${t}</div><div class="v num">${x}</div></div>`).join('');
+  document.querySelector('#s-table tbody').innerHTML=s.lines.map(l=>`<tr>
+    <td class="num">${l.date}</td><td>${esc(l.desc)}</td>
+    <td class="num">${l.debit?fmt(l.debit):''}</td><td class="num">${l.credit?fmt(l.credit):''}</td>
+    <td class="num ${l.balance>0?'bad':'ok'}"><b>${fmt(l.balance)}</b></td></tr>`).join('');
+}
+function printStatement(){
+  if(!lastStatement){toast('اختر الطرف أولاً',true);return;}
+  const s=lastStatement;
+  const isSup = s.customer && s.customer.kind==='supplier';
+  const rows=s.lines.map(l=>`<tr><td class="num">${l.date}</td><td>${esc(l.desc)}</td>
+    <td class="num">${l.debit?fmt(l.debit):''}</td><td class="num">${l.credit?fmt(l.credit):''}</td>
+    <td class="num"><b>${fmt(l.balance)}</b></td></tr>`).join('');
+  showPrint(`<div class="doc">
+    ${companyHeader(s.company||{}, 'كشف حساب')}
+    <div class="sub">${isSup?'المورد':'العميل'}: <b>${esc(s.customer?s.customer.name:'')}</b> — بتاريخ <span class="num">${today()}</span></div>
+    <table><thead><tr><th>التاريخ</th><th>البيان</th><th>مدين</th><th>دائن</th><th>الرصيد</th></tr></thead>
+    <tbody>${rows}</tbody></table>
+    <table style="width:60%;margin-right:auto">
+      <tr><td>${isSup?'إجمالي المشتريات':'إجمالي المبيعات'}</td><td class="num">${fmt(s.summary.sales)}</td></tr>
+      <tr><td>المرتجعات</td><td class="num">-${fmt(s.summary.returns)}</td></tr>
+      <tr><td>${isSup?'المدفوع للمورد':'المحصل'}</td><td class="num">-${fmt(s.summary.paid)}</td></tr>
+      <tr><td><b>${isSup?'مستحق له':'المتبقي عليه'}</b></td><td class="num"><b>${fmt(s.summary.remaining)}</b></td></tr>
+    </table>
+  </div>`);
+}
+function showPrint(html){
+  document.getElementById('print-area').innerHTML=html;
+  setTimeout(()=>window.print(),150);
+}
+
+/* ---------- import ---------- */
+let medoData=null;
+function readFile(file, asB64){
+  return new Promise((res,rej)=>{
+    const r=new FileReader();
+    r.onload=()=>res(r.result); r.onerror=rej;
+    if(asB64) r.readAsDataURL(file); else r.readAsText(file,'utf-8');
+  });
+}
+async function medoPreview(){
+  const f=document.getElementById('medo-file').files[0];
+  if(!f){toast('اختر ملف JSON',true);return;}
+  try{
+    const txt=await readFile(f);
+    medoData=JSON.parse(txt);
+    const r=await api('/api/import/medo',{method:'POST',body:JSON.stringify({mode:'preview',data:medoData})});
+    document.getElementById('medo-result').innerHTML=
+      `سيتم استيراد: <b class="num">${r.customers}</b> عميل (موجود منهم <span class="num">${r.customers_dupes}</span> سيتخطاهم)`+
+      ` و <b class="num">${r.suppliers}</b> مورد برصيد افتتاحي إجمالي <span class="num">${fmt(r.suppliers_balance_total)}</span>`+
+      (r.suppliers_dupes?` (موجود منهم <span class="num">${r.suppliers_dupes}</span> سيتخطاهم)`:'')+
+      `<br><span class="bad">${esc(r.note)}</span>`;
+    document.getElementById('medo-run').classList.remove('hidden');
+  }catch(e){ document.getElementById('medo-result').textContent='فشل: '+e.message; }
+}
+async function medoRun(){
+  try{
+    const r=await api('/api/import/medo',{method:'POST',body:JSON.stringify({mode:'commit',data:medoData,filename:document.getElementById('medo-file').files[0].name})});
+    document.getElementById('medo-result').innerHTML=
+      `تم: عملاء جدد <b class="num">${r.customers_added}</b>، موردون جدد <b class="num">${r.suppliers_added}</b>، تم تخطيهم (موجودون) <span class="num">${r.skipped}</span>`;
+    document.getElementById('medo-run').classList.add('hidden');
+    refreshCustomers();
+  }catch(e){ document.getElementById('medo-result').textContent='فشل: '+e.message; }
+}
+let impTable=null, impFields=null, impB64=null, impText=null, impFileName='';
+let mfBalText=null, mfStText=null;
+function mfShow(r){
+  let html=`عملاء في الأرصدة: <b class="num">${r.customers_in_balances}</b> — سطور الكشوف: <b class="num">${r.statement_lines}</b> — إجمالي الأرصدة الرسمية: <b class="num">${fmt(r.total_official)}</b><br>`+
+    `متطابقون (الكشف يفسر الرصيد): <b class="num ok">${r.matched}</b> — غير متطابقين (سيُضاف رصيد افتتاحي مصحِّح): <b class="num bad">${r.mismatched}</b>`;
+  if(r.mismatch_list&&r.mismatch_list.length){
+    html+='<table style="margin-top:8px"><thead><tr><th>الكود</th><th>العميل</th><th>الرصيد الرسمي</th><th>صافي الحركات</th><th>التصحيح الافتتاحي</th></tr></thead><tbody>'+
+      r.mismatch_list.map(m=>`<tr><td class="num">${esc(m.code)}</td><td>${esc(m.name)}</td><td class="num">${fmt(m.official)}</td><td class="num">${fmt(m.history_net)}</td><td class="num">${fmt(m.correction)}</td></tr>`).join('')+
+      '</tbody></table>';
+  }
+  document.getElementById('mf-result').innerHTML=html;
+}
+async function mfPreview(){
+  const fb=document.getElementById('mf-bal').files[0], fs=document.getElementById('mf-st').files[0];
+  if(!fb&&!fs){toast('اختر ملفًا واحدًا على الأقل',true);return;}
+  mfBalText=fb?await readFile(fb):''; mfStText=fs?await readFile(fs):'';
+  try{
+    const r=await api('/api/import/medo-full',{method:'POST',body:JSON.stringify({mode:'preview',balances_text:mfBalText,statements_text:mfStText})});
+    mfShow(r);
+    document.getElementById('mf-run').classList.remove('hidden');
+  }catch(e){ document.getElementById('mf-result').textContent='فشل: '+e.message; }
+}
+async function mfRun(){
+  try{
+    const r=await api('/api/import/medo-full',{method:'POST',body:JSON.stringify({mode:'commit',balances_text:mfBalText,statements_text:mfStText})});
+    document.getElementById('mf-result').innerHTML=
+      `تم: جديد <b class="num">${r.added}</b>، محدث <b class="num">${r.updated}</b>، سطور كشوف <b class="num">${r.lines}</b>، غير متطابقين <span class="num bad">${r.mismatched}</span> (راجعهم بالأسفل)`;
+    mfShow({customers_in_balances:'-',statement_lines:r.lines,total_official:'-',matched:'-',mismatched:r.mismatched,mismatch_list:r.mismatch_list});
+    document.getElementById('mf-run').classList.add('hidden');
+    refreshCustomers();
+  }catch(e){ document.getElementById('mf-result').textContent='فشل: '+e.message; }
+}
+async function impPreview(){
+  const f=document.getElementById('imp-file').files[0];
+  if(!f){toast('اختر ملف',true);return;}
+  impFileName=f.name;
+  try{
+    let body;
+    if(/\.xlsx$/i.test(f.name)){
+      const dataUrl=await readFile(f,true);
+      impB64=dataUrl.split(',')[1]; impText=null;
+      body={mode:'preview',kind:document.getElementById('imp-kind').value,b64:impB64};
+    }else{
+      impText=await readFile(f); impB64=null;
+      body={mode:'preview',kind:document.getElementById('imp-kind').value,text:impText};
+    }
+    const r=await api('/api/import/parties',{method:'POST',body:JSON.stringify(body)});
+    impFields=r.fields;
+    const mapDiv=document.getElementById('imp-map');
+    const headOpts=(sel)=> '<option value="-1">-- تجاهل --</option>'+r.headers.map((h,i)=>`<option value="${i}" ${r.suggested&&r.suggested[sel]===i?'selected':''}>${esc(h||('عمود '+(i+1)))}</option>`).join('');
+    mapDiv.innerHTML='<h3 style="margin:6px 0">عيّن الأعمدة ('+r.rows+' صف)</h3>'+
+      Object.keys(r.fields).map(f=>`<div class="field" style="display:inline-block;margin:4px"><label>${r.fields[f]}</label><select id="map-${f}">${headOpts(f)}</select></div>`).join('')+
+      '<div style="margin-top:8px"><button onclick="impRun()">تنفيذ الاستيراد</button></div>'+
+      '<div class="muted" style="margin-top:6px">عينة: '+r.sample.slice(0,3).map(row=>esc(row.join(' | '))).join('<br>')+'</div>';
+    mapDiv.classList.remove('hidden');
+  }catch(e){ document.getElementById('imp-result').textContent='فشل: '+e.message; }
+}
+async function impRun(){
+  const mapping={};
+  for(const f of Object.keys(impFields)){
+    const val=parseInt(document.getElementById('map-'+f).value);
+    if(val>=0) mapping[f]=val;
+  }
+  if(mapping.name===undefined){toast('حدد عمود الاسم',true);return;}
+  try{
+    const body={mode:'commit',kind:document.getElementById('imp-kind').value,mapping,filename:impFileName};
+    if(impB64) body.b64=impB64; else body.text=impText;
+    const r=await api('/api/import/parties',{method:'POST',body:JSON.stringify(body)});
+    document.getElementById('imp-result').innerHTML=
+      `تم: جديد <b class="num">${r.added}</b>، تحديث رصيد <b class="num">${r.updated}</b>، تم تخطيه <span class="num">${r.skipped}</span>`;
+    document.getElementById('imp-map').classList.add('hidden');
+    refreshCustomers();
+  }catch(e){ document.getElementById('imp-result').textContent='فشل: '+e.message; }
+}
+
+/* ---------- settings & users ---------- */
+async function loadSettings(){
+  const s=await api('/api/settings');
+  document.getElementById('set-name').value=s.company_name||'';
+  document.getElementById('set-phone').value=s.company_phone||'';
+  document.getElementById('set-address').value=s.company_address||'';
+  document.getElementById('set-alert-days').value=s.alert_days||30;
+  document.getElementById('set-backup-dir').value=s.backup_dir||'';
+  document.getElementById('set-backup-info').textContent='النسخ الاحتياطي الآن يذهب إلى: '+s.backup_dir_effective;
+  loadUsers();
+}
+async function saveSettings(){
+  try{
+    await api('/api/settings',{method:'POST',body:JSON.stringify({
+      company_name:v('set-name'),company_phone:v('set-phone'),company_address:v('set-address'),
+      alert_days:v('set-alert-days')||'30',backup_dir:v('set-backup-dir')})});
+    toast('تم حفظ الإعدادات'); loadSettings();
+  }catch(e){toast(e.message,true);}
+}
+async function loadUsers(){
+  const us=await api('/api/users');
+  document.querySelector('#users-table tbody').innerHTML=us.map(u=>`<tr>
+    <td>${esc(u.username)}</td><td>${u.role==='admin'?'مدير':'مستخدم'}</td>
+    <td style="white-space:nowrap">
+      <button class="small ghost" onclick="resetUser(${u.id},'${esc(u.username)}')">تصفير كلمة السر</button>
+      <button class="small danger" onclick="delUser(${u.id})">حذف</button></td></tr>`).join('');
+}
+async function addUser(){
+  try{
+    await api('/api/users',{method:'POST',body:JSON.stringify({username:v('u-name'),password:document.getElementById('u-pass').value,role:document.getElementById('u-role').value})});
+    toast('تمت الإضافة');
+    document.getElementById('u-name').value='';document.getElementById('u-pass').value='';
+    loadUsers();
+  }catch(e){toast(e.message,true);}
+}
+async function resetUser(id,name){
+  const pw=prompt('كلمة سر جديدة للمستخدم '+name+':');
+  if(!pw) return;
+  try{ await api('/api/users/'+id+'/reset',{method:'POST',body:JSON.stringify({password:pw})}); toast('تم التصفير'); }
+  catch(e){toast(e.message,true);}
+}
+async function delUser(id){
+  if(!confirm('حذف المستخدم؟')) return;
+  try{ await api('/api/users/'+id,{method:'DELETE'}); toast('تم الحذف'); loadUsers(); }
+  catch(e){toast(e.message,true);}
+}
+async function changePassword(){
+  try{
+    await api('/api/change-password',{method:'POST',body:JSON.stringify({old:document.getElementById('pw-old').value,new:document.getElementById('pw-new').value})});
+    toast('تم تغيير كلمة السر');
+    document.getElementById('pw-old').value='';document.getElementById('pw-new').value='';
+  }catch(e){toast(e.message,true);}
+}
+
+/* ---------- backup & update ---------- */
+async function doBackup(){
+  try{ await api('/api/backup',{method:'POST',body:'{}'});
+    toast('تم حفظ نسخة احتياطية'); }
+  catch(e){ toast(e.message,true); }
+}
+async function openUpdate(){
+  document.getElementById('update-modal').style.display='flex';
+  document.getElementById('update-status').textContent='جارٍ الفحص...';
+  document.getElementById('update-btn').classList.add('hidden');
+  try{
+    const r=await api('/api/check-update');
+    const st=document.getElementById('update-status');
+    if(!r.configured){ st.textContent='التحديث التلقائي غير مفعّل بعد.'; return; }
+    if(!r.online){
+      st.innerHTML=esc(r.message||'تعذر الاتصال بخادم التحديثات.')+' الإصدار الحالي: <span class="num">'+esc(r.current)+'</span>'
+        +(r.error?'<br><small class="muted" style="font-size:11px;direction:ltr;display:inline-block">'+esc(r.error)+'</small>':'')
+        +'<br><button class="ghost" style="margin-top:8px" onclick="openUpdate()">إعادة المحاولة</button>';
+      return;
+    }
+    if(r.update_available){
+      st.innerHTML=`يوجد إصدار جديد: <b class="num">${r.latest}</b> (الحالي: <span class="num">${r.current}</span>)`+(r.notes?'<br>'+esc(r.notes):'');
+      if(r.has_zip) document.getElementById('update-btn').classList.remove('hidden');
+    }else{
+      st.textContent='النظام محدث. الإصدار الحالي: '+r.current;
+    }
+  }catch(e){ document.getElementById('update-status').textContent='تعذر الفحص: '+e.message; }
+}
+async function runUpdate(){
+  document.getElementById('update-status').textContent='جارٍ التحميل والتثبيت... لا تغلق البرنامج.';
+  document.getElementById('update-btn').classList.add('hidden');
+  try{
+    const r=await api('/api/do-update',{method:'POST',body:'{}'});
+    document.getElementById('update-status').innerHTML=
+      'تم التثبيت. سيغلق البرنامج الآن وتُفتح النسخة الجديدة تلقائياً.<br>النسخة الجديدة في: <span class="num">'+esc(r.new_folder)+'</span>';
+  }catch(e){ document.getElementById('update-status').textContent='فشل التحديث: '+e.message; }
+}
+function closeUpdate(){ document.getElementById('update-modal').style.display='none'; }
+
+/* ---------- master data ---------- */
+async function addDefCustomer(kind){
+  const p = kind==='customer' ? 'dc' : 'ds';
+  const name = v(p+'-name');
+  if(!name){ toast('اكتب الاسم الأول', true); return; }
+  try{
+    await api('/api/customers',{method:'POST',body:JSON.stringify({name:name,phone:v(p+'-phone'),address:v(p+'-address'),kind:kind})});
+    toast('تمت الإضافة');
+    document.getElementById(p+'-name').value=''; document.getElementById(p+'-phone').value=''; document.getElementById(p+'-address').value='';
+    refreshCustomers();
+  }catch(e){ toast(e.message,true); }
+}
+async function addEmployee(){
+  if(!v('de-name')){ toast('اكتب اسم الموظف الأول', true); return; }
+  try{
+    await api('/api/employees',{method:'POST',body:JSON.stringify({name:v('de-name'),role:v('de-role'),phone:v('de-phone'),start_date:v('de-start'),notes:v('de-notes')})});
+    toast('تمت إضافة الموظف');
+    for(const id of ['de-name','de-role','de-phone','de-start','de-notes']) document.getElementById(id).value='';
+    loadEmployees();
+  }catch(e){ toast(e.message,true); }
+}
+async function loadEmployees(){
+  const list = await api('/api/employees');
+  document.getElementById('employees-body').innerHTML = list.map(e=>
+    `<tr><td>${esc(e.name)}</td><td>${esc(e.role||'')}</td><td class="num">${esc(e.phone||'')}</td><td class="num">${esc(e.start_date||'')}</td><td>${esc(e.notes||'')}</td><td>${e.active?'شغال':'موقوف'}</td><td><button class="ghost" onclick="toggleEmployee(${e.id})">${e.active?'إيقاف':'تشغيل'}</button></td></tr>`).join('');
+}
+async function toggleEmployee(id){
+  await api('/api/employees/'+id+'/toggle',{method:'POST',body:'{}'});
+  loadEmployees();
+}
+
+/* ---------- boot ---------- */
+async function bootData(){
+  document.getElementById('i-date').value=today();
+  document.getElementById('p-date').value=today();
+  await refreshCustomers();
+  if(!document.getElementById('i-items').children.length) addItemRow();
+  loadDash();
+}
+setInterval(()=>{ fetch('/api/version').catch(()=>{}); }, 30000);
+(async function(){
+  try{
+    await bootAuth();
+  }catch(e){
+    showLogin();
+    document.getElementById('login-err').textContent='مش قادر أتصل بالبرنامج. اقفل البرنامج وشغّله تاني، ولو المشكلة مستمرة اعمل Restart للجهاز.';
+    const b=document.createElement('button');
+    b.textContent='إعادة المحاولة'; b.onclick=()=>location.reload();
+    document.getElementById('login-err').appendChild(document.createElement('br'));
+    document.getElementById('login-err').appendChild(b);
+  }
+  if(currentUser){
+    const m = location.hash.match(/tab=([a-z]+)/);
+    if(m && document.getElementById('tab-'+m[1])) showTab(m[1]);
+    bootData();
+  }
+})();
+</script>
+</body>
+</html>
