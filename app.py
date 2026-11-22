@@ -30,7 +30,7 @@ from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.3.0"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
@@ -217,12 +217,24 @@ CREATE TABLE IF NOT EXISTS cheques (
   notes TEXT DEFAULT '',
   created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS customer_prices (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+  item_name TEXT NOT NULL,
+  price REAL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  UNIQUE(customer_id, item_name)
+);
 CREATE TABLE IF NOT EXISTS activity_log (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   ts TEXT NOT NULL,
   username TEXT DEFAULT '',
   action TEXT NOT NULL,
   details TEXT DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS cheque_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  cheque_id INTEGER, ts TEXT, event TEXT, detail TEXT
 );
 """
 
@@ -237,6 +249,10 @@ MIGRATIONS = [
     ("payments", "direction", "ALTER TABLE payments ADD COLUMN direction TEXT NOT NULL DEFAULT 'in'"),
     ("payments", "cheque", "ALTER TABLE payments ADD COLUMN cheque REAL DEFAULT 0"),
     ("invoices", "reason", "ALTER TABLE invoices ADD COLUMN reason TEXT DEFAULT ''"),
+    ("cheques", "endorsed_to", "ALTER TABLE cheques ADD COLUMN endorsed_to INTEGER"),
+    ("cheques", "endorsed_date", "ALTER TABLE cheques ADD COLUMN endorsed_date TEXT DEFAULT ''"),
+    ("cheques", "endorsed_note", "ALTER TABLE cheques ADD COLUMN endorsed_note TEXT DEFAULT ''"),
+    ("cheques", "endorsement_payment_id", "ALTER TABLE cheques ADD COLUMN endorsement_payment_id INTEGER"),
 ]
 
 DEFAULT_SETTINGS = {
@@ -986,6 +1002,11 @@ class API:
                 " VALUES (?,?,?,?,?,?,?,?)",
                 (cid, pid, due, cheque, body.get("cheque_bank", ""),
                  body.get("cheque_number", ""), body.get("notes", ""), now_str()))
+            chk_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+            ev0 = "إصدار الشيك" if (party and party["kind"] == "supplier") else "استلام الشيك"
+            conn.execute("INSERT INTO cheque_events (cheque_id, ts, event, detail) VALUES (?,?,?,?)",
+                         (chk_id, now_str(), ev0,
+                          "%s - %s - سند رقم %s - الاستحقاق %s" % (ev0, party["name"] if party else "", pid, due)))
         instant = cash + card + transfer
         if instant > 0:
             cat = "تحصيل من عميل" if direction == "in" else "دفع لمورد"
@@ -1051,7 +1072,7 @@ class API:
                 "debit": debit, "credit": credit,
             })
         for p in conn.execute("SELECT * FROM payments WHERE customer_id=?", (cid,)):
-            total = (p["cash"] or 0) + (p["card"] or 0) + (p["transfer"] or 0)
+            total = (p["cash"] or 0) + (p["card"] or 0) + (p["transfer"] or 0) + (p["cheque"] or 0)
             parts = []
             if p["cash"]:
                 parts.append("كاش")
@@ -1059,6 +1080,8 @@ class API:
                 parts.append("شبكة")
             if p["transfer"]:
                 parts.append("تحويل")
+            if p["cheque"]:
+                parts.append("شيك")
             label = "دفعة للمورد" if is_supplier else "دفعة"
             lines.append({
                 "date": p["date"], "sort": p["created_at"], "type": "payment", "ref": p["id"],
@@ -1087,7 +1110,7 @@ class API:
                                       (inv["id"],)).fetchone()["s"]
             elif inv["kind"] == ret_kind:
                 returns += net
-        paid = conn.execute("SELECT COALESCE(SUM(cash+card+transfer),0) s FROM payments WHERE customer_id=?",
+        paid = conn.execute("SELECT COALESCE(SUM(cash+card+transfer+cheque),0) s FROM payments WHERE customer_id=?",
                             (cid,)).fetchone()["s"]
         led = conn.execute("SELECT COALESCE(SUM(debit-credit),0) s FROM ledger_entries WHERE customer_id=?",
                            (cid,)).fetchone()["s"]
@@ -1168,7 +1191,7 @@ class API:
         soon7 = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d")
         out["cheques_due"] = rows(conn.execute(
             "SELECT c.*, cu.name AS customer_name FROM cheques c JOIN customers cu ON cu.id=c.customer_id"
-            " WHERE c.status='pending' AND c.due_date<=? ORDER BY c.due_date", (soon7,)))
+            " WHERE c.status IN ('pending','endorsed') AND c.due_date<=? ORDER BY c.due_date", (soon7,)))
         conn.close()
         return 200, out
 
@@ -1368,11 +1391,22 @@ class API:
             args.append(status)
         sql += " ORDER BY c.due_date, c.id"
         out = rows(conn.execute(sql, args))
-        conn.close()
         today = datetime.now().strftime("%Y-%m-%d")
+        sup_names = {}
         for c in out:
-            c["overdue"] = c["status"] == "pending" and c["due_date"] < today
-        return 200, out
+            c["overdue"] = c["status"] in ("pending", "endorsed") and c["due_date"] < today
+            if c["endorsed_to"]:
+                if c["endorsed_to"] not in sup_names:
+                    r = conn.execute("SELECT name FROM customers WHERE id=?", (c["endorsed_to"],)).fetchone()
+                    sup_names[c["endorsed_to"]] = r["name"] if r else ""
+                c["endorsed_name"] = sup_names[c["endorsed_to"]]
+        totals = {"in_hand": 0.0, "endorsed": 0.0, "cashed": 0.0, "bounced": 0.0}
+        for c in out:
+            key = {"pending": "in_hand"}.get(c["status"], c["status"])
+            if key in totals:
+                totals[key] = round(totals[key] + c["amount"], 2)
+        conn.close()
+        return 200, {"cheques": out, "totals": totals}
 
     def set_cheque_status(cid, body, user):
         st = body.get("status")
@@ -1383,8 +1417,10 @@ class API:
         if not c:
             conn.close()
             return 404, {"error": "not found"}
+        old_status = c["status"]
         conn.execute("UPDATE cheques SET status=? WHERE id=?", (st, cid))
-        if st == "cashed" and c["status"] != "cashed":
+        if st == "cashed" and old_status != "cashed" and not c["endorsement_payment_id"]:
+            # cash actually enters only when WE collect the paper ourselves
             cust = conn.execute("SELECT * FROM customers WHERE id=?", (c["customer_id"],)).fetchone()
             direction = "out" if (cust and cust["kind"] == "supplier") else "in"
             cat = "صرف شيك لمورد" if direction == "out" else "تحصيل شيك"
@@ -1393,12 +1429,76 @@ class API:
                 " VALUES (?,?,?,?,?,?,?,?)",
                 (datetime.now().strftime("%Y-%m-%d"), direction, cat, c["amount"],
                  "شيك " + (c["cheque_number"] or ""), "cheque", cid, now_str()))
+        if st == "bounced" and old_status != "bounced":
+            # customer debt goes back up
+            if c["payment_id"]:
+                conn.execute("UPDATE payments SET cheque = MAX(0, cheque - ?) WHERE id=?",
+                             (c["amount"], c["payment_id"]))
+            # endorsement reversed: supplier was never really paid
+            if c["endorsement_payment_id"]:
+                conn.execute("DELETE FROM payments WHERE id=?", (c["endorsement_payment_id"],))
+                conn.execute("UPDATE cheques SET endorsement_payment_id=NULL, endorsed_to=NULL, endorsed_date='', endorsed_note='' WHERE id=?", (cid,))
+            # any treasury movement from this cheque is undone
+            conn.execute("DELETE FROM treasury WHERE source='cheque' AND source_id=?", (cid,))
+        ev_map = {"pending": "رجع تحت التحصيل", "cashed": "تم الصرف", "bounced": "مرتجع"}
+        det = ""
+        if st == "cashed" and c["endorsement_payment_id"]:
+            det = "اتصرف عند المورد - مفيش حركة نقدية في الخزينة"
+        elif st == "bounced":
+            det = "الشيك اترجع - المديونية رجعت على العميل"
+            if c["endorsement_payment_id"]:
+                det += " واتلغى التظهير للمورد"
+        conn.execute("INSERT INTO cheque_events (cheque_id, ts, event, detail) VALUES (?,?,?,?)",
+                     (cid, now_str(), ev_map[st], det))
         log_action(conn, user, "حالة شيك",
-                   "شيك %s - %s" % (c["cheque_number"] or cid,
-                                    {"pending": "تحت التحصيل", "cashed": "تم الصرف", "bounced": "مرتجع"}[st]))
+                   "شيك %s - %s" % (c["cheque_number"] or cid, ev_map[st]))
         conn.commit()
         conn.close()
         return 200, {"ok": True}
+
+    def cheque_history(cid, user):
+        conn = get_db()
+        out = rows(conn.execute(
+            "SELECT ts, event, detail FROM cheque_events WHERE cheque_id=? ORDER BY id", (cid,)))
+        conn.close()
+        return 200, out
+
+    def endorse_cheque(cid, body, user):
+        sid = body.get("supplier_id")
+        if not sid:
+            return 400, {"error": "اختر المورد"}
+        conn = get_db()
+        c = conn.execute("SELECT * FROM cheques WHERE id=?", (cid,)).fetchone()
+        if not c:
+            conn.close()
+            return 404, {"error": "not found"}
+        if c["status"] != "pending":
+            conn.close()
+            return 400, {"error": "التظهير متاح للشيكات تحت التحصيل فقط"}
+        sup = conn.execute("SELECT * FROM customers WHERE id=? AND kind='supplier'", (sid,)).fetchone()
+        if not sup:
+            conn.close()
+            return 400, {"error": "المورد غير موجود"}
+        cust = conn.execute("SELECT * FROM customers WHERE id=?", (c["customer_id"],)).fetchone()
+        edate = body.get("date") or datetime.now().strftime("%Y-%m-%d")
+        note = "تظهير شيك %s من %s" % (c["cheque_number"] or cid, cust["name"] if cust else "")
+        if body.get("notes"):
+            note += " - " + body["notes"]
+        cur = conn.execute(
+            "INSERT INTO payments (customer_id, date, cash, card, transfer, cheque, notes, direction, created_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?)",
+            (sid, edate, 0, 0, 0, c["amount"], note, "out", now_str()))
+        epid = cur.lastrowid
+        conn.execute("UPDATE cheques SET status='endorsed', endorsed_to=?, endorsed_date=?,"
+                     " endorsed_note=?, endorsement_payment_id=? WHERE id=?",
+                     (sid, edate, body.get("notes", ""), epid, cid))
+        conn.execute("INSERT INTO cheque_events (cheque_id, ts, event, detail) VALUES (?,?,?,?)",
+                     (cid, now_str(), "تظهير", "اتظهّر للمورد: %s - بتاريخ %s" % (sup["name"], edate)))
+        log_action(conn, user, "تظهير شيك",
+                   "شيك %s (%s) إلى %s" % (c["cheque_number"] or cid, round(c["amount"], 2), sup["name"]))
+        conn.commit()
+        conn.close()
+        return 200, {"ok": True, "payment_id": epid}
 
     # ---------- aging ----------
     def aging(q, user):
@@ -1459,6 +1559,68 @@ class API:
         out = rows(conn.execute("SELECT * FROM activity_log ORDER BY id DESC LIMIT 200"))
         conn.close()
         return 200, out
+
+    # ---------- price lists ----------
+    def list_prices(q, user):
+        cid = q.get("customer_id", [""])[0]
+        if not cid:
+            return 400, {"error": "customer_id required"}
+        conn = get_db()
+        out = rows(conn.execute("SELECT * FROM customer_prices WHERE customer_id=? ORDER BY item_name", (cid,)))
+        conn.close()
+        return 200, out
+
+    def save_price(body, user):
+        cid = body.get("customer_id")
+        name = (body.get("item_name") or "").strip()
+        if not cid or not name:
+            return 400, {"error": "اختر العميل واكتب اسم الصنف"}
+        price = float(body.get("price") or 0)
+        conn = get_db()
+        conn.execute("INSERT INTO customer_prices (customer_id, item_name, price, created_at) VALUES (?,?,?,?) "
+                     "ON CONFLICT(customer_id, item_name) DO UPDATE SET price=excluded.price",
+                     (cid, name, price, now_str()))
+        conn.commit()
+        conn.close()
+        return 200, {"ok": True}
+
+    def delete_price(pid, user=None):
+        conn = get_db()
+        conn.execute("DELETE FROM customer_prices WHERE id=?", (pid,))
+        conn.commit()
+        conn.close()
+        return 200, {"ok": True}
+
+    # ---------- profit ----------
+    def profit(q, user):
+        month = q.get("month", [""])[0]
+        like = month + "%" if month else "%"
+        conn = get_db()
+        sales = returns = 0.0
+        for r in conn.execute("SELECT id, kind FROM invoices WHERE date LIKE ?", (like,)):
+            net = invoice_net(r["id"], conn)
+            if r["kind"] == "sale":
+                sales += net
+            elif r["kind"] == "return":
+                returns += net
+        tre = rows(conn.execute("SELECT kind, category, amount, source FROM treasury WHERE date LIKE ?", (like,)))
+        conn.close()
+        collected = sum(e["amount"] for e in tre if e["kind"] == "in")
+        paid_suppliers = sum(e["amount"] for e in tre if e["kind"] == "out" and e["source"] in ("payment", "cheque"))
+        expenses = {}
+        for e in tre:
+            if e["kind"] == "out" and e["source"] == "manual":
+                expenses[e["category"] or "أخرى"] = expenses.get(e["category"] or "أخرى", 0) + e["amount"]
+        exp_total = sum(expenses.values())
+        return 200, {
+            "sales": round(sales, 2), "returns": round(returns, 2),
+            "net_sales": round(sales - returns, 2),
+            "collected": round(collected, 2),
+            "paid_suppliers": round(paid_suppliers, 2),
+            "expenses": {k: round(v, 2) for k, v in sorted(expenses.items(), key=lambda x: -x[1])},
+            "expenses_total": round(exp_total, 2),
+            "gross": round(sales - returns - exp_total, 2),
+        }
 
 
 # ---------------- import ----------------
@@ -1827,6 +1989,7 @@ ROUTES_POST = {
     "/api/wipe": (lambda b, u: API.wipe(b, u), True),
     "/api/sync/push": (lambda b, u: API.sync_push(b, u), True),
     "/api/treasury": (lambda b, u: API.create_treasury(b, u), False),
+    "/api/prices": (lambda b, u: API.save_price(b, u), False),
     "/api/sync/pull": (lambda b, u: API.sync_pull(b, u), True),
 }
 ROUTES_GET = {
@@ -1845,6 +2008,8 @@ ROUTES_GET = {
     "/api/cheques": (API.list_cheques, False),
     "/api/aging": (API.aging, False),
     "/api/activity": (API.list_activity, True),
+    "/api/prices": (API.list_prices, False),
+    "/api/profit": (API.profit, False),
     "/api/users": (API.list_users, True),
     "/api/check-update": (API.check_update, False),
 }
@@ -1927,6 +2092,8 @@ class Handler(BaseHTTPRequestHandler):
                 if adm and user["role"] != "admin":
                     return self._send(403, {"error": "admin_required"})
                 return self._send(*fn(q, user))
+            if path.startswith("/api/cheques/") and path.endswith("/history"):
+                return self._send(*API.cheque_history(int(path.split("/")[3]), user))
             if path.startswith("/api/invoices/"):
                 return self._send(*API.get_invoice(int(path.rsplit("/", 1)[1]), user))
             self._send(404, {"error": "not found"})
@@ -1967,6 +2134,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(*API.toggle_employee(int(path.split("/")[3]), user))
             if path.startswith("/api/cheques/") and path.endswith("/status"):
                 return self._send(*API.set_cheque_status(int(path.split("/")[3]), body, user))
+            if path.startswith("/api/cheques/") and path.endswith("/endorse"):
+                return self._send(*API.endorse_cheque(int(path.split("/")[3]), body, user))
             if path.startswith("/api/customers/"):
                 return self._send(*API.update_customer(int(path.rsplit("/", 1)[1]), body, user))
             if path.startswith("/api/users/") and path.endswith("/reset"):
@@ -1994,6 +2163,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(*API.delete_payment(int(parts[2]), user))
                 if parts[1] == "treasury":
                     return self._send(*API.delete_treasury(int(parts[2]), user))
+                if parts[1] == "prices":
+                    return self._send(*API.delete_price(int(parts[2]), user))
                 if parts[1] == "customers":
                     return self._send(*API.delete_customer(int(parts[2])))
                 if parts[1] == "users":
