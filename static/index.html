@@ -148,6 +148,7 @@
   <button data-tab="statement" onclick="showTab('statement')">كشف حساب</button>
   <button data-tab="treasury" onclick="showTab('treasury')">الخزينة</button>
   <button data-tab="cheques" onclick="showTab('cheques')">الشيكات</button>
+  <button data-tab="profit" onclick="showTab('profit')">الأرباح</button>
 </div>
 <div class="subnav hidden" id="subnav-inventory">
   <button data-tab="inventory" data-inv="materials" class="active" onclick="showTab('inventory','materials')">الخامات</button>
@@ -260,6 +261,16 @@
         <button onclick="saveCustomer()">حفظ</button>
         <button class="ghost" onclick="resetCustomerForm()">جديد</button>
       </div>
+    </div>
+    <div class="panel cust-only">
+      <h2>قائمة أسعار خاصة <span class="sub">سعر ثابت لصنف معيّن لعميل معيّن - بيتملّى تلقائيًا في الفاتورة</span></h2>
+      <div class="row">
+        <div class="field"><label>العميل</label><select id="pl-customer" style="width:200px" onchange="loadPrices()"></select></div>
+        <div class="field"><label>الصنف</label><input id="pl-item" style="width:160px"></div>
+        <div class="field"><label>السعر</label><input id="pl-price" type="number" min="0" step="0.01" class="num" style="width:100px"></div>
+        <button onclick="savePrice()">حفظ السعر</button>
+      </div>
+      <table id="pl-table"><thead><tr><th>الصنف</th><th>السعر</th><th></th></tr></thead><tbody></tbody></table>
     </div>
     <div class="panel">
       <h2 id="cust-list-title">العملاء</h2>
@@ -375,13 +386,30 @@
       <div class="row">
         <div class="field"><label>الحالة</label><select id="ch-filter" onchange="loadCheques()">
           <option value="">الكل</option><option value="pending">تحت التحصيل</option>
-          <option value="cashed">تم الصرف</option><option value="bounced">مرتجع</option>
+          <option value="endorsed">مظهّر لمورد</option><option value="cashed">تم الصرف</option><option value="bounced">مرتجع</option>
         </select></div>
       </div>
+      <div class="cards" id="ch-totals"></div>
       <table id="ch-table"><thead><tr>
         <th>الاستحقاق</th><th>الطرف</th><th>المبلغ</th><th>البنك</th><th>رقم الشيك</th><th>الحالة</th><th>ملاحظات</th><th></th>
       </tr></thead><tbody></tbody></table>
       <p class="muted">الشيك بيتسجّل من شاشة الدفعات (خانة "شيك"). الشيك المتأخر عن تاريخ استحقاقه بيظهر بالأحمر، واللي قرب يستحق بيظهر في تنبيهات الرئيسية.</p>
+    </div>
+  </section>
+
+  <!-- profit -->
+  <section id="tab-profit" class="hidden">
+    <div class="panel">
+      <div class="row">
+        <div class="field"><label>الشهر</label><input id="pr-month" type="month" onchange="loadProfit()"></div>
+        <button class="ghost" onclick="document.getElementById('pr-month').value='';loadProfit()">كل الفترة</button>
+      </div>
+    </div>
+    <div class="cards" id="pr-cards"></div>
+    <div class="panel">
+      <h2>المصروفات العامة حسب البند</h2>
+      <div id="pr-expenses"></div>
+      <p class="muted">الربح هنا = صافي المبيعات ناقص المصروفات العامة، من غير تكلفة الخامات - هتتكامل لما قسم المخزن يشتغل.</p>
     </div>
   </section>
 
@@ -391,6 +419,7 @@
       <div class="row">
         <div class="field"><label>العميل / المورد</label><select id="s-customer" style="width:240px" onchange="loadStatement()"></select></div>
         <button class="ghost" onclick="printStatement()">طباعة الكشف</button>
+        <button class="ghost" onclick="shareStatementWhatsApp()">مشاركة واتساب</button>
         <span class="muted">لحفظ PDF: من نافذة الطباعة اختر "حفظ كـ PDF"</span>
       </div>
       <div class="cards" id="s-cards"></div>
@@ -469,6 +498,32 @@
   </section>
 </main>
 
+<!-- endorse modal -->
+<div class="modal-bg" id="endorse-modal">
+  <div class="modal">
+    <h3>تظهير الشيك لمورد</h3>
+    <div id="end-info" class="muted" style="margin-bottom:8px"></div>
+    <div class="field"><label>المورد</label><select id="end-supplier"></select></div>
+    <div class="field"><label>تاريخ التظهير</label><input id="end-date" type="date"></div>
+    <div class="field"><label>ملاحظة</label><input id="end-note"></div>
+    <div class="row" style="margin-top:10px">
+      <button onclick="saveEndorse()">تأكيد التظهير</button>
+      <button class="ghost" onclick="document.getElementById('endorse-modal').style.display='none'">إلغاء</button>
+    </div>
+    <p class="muted">التظهير بيقلل مستحقات المورد فورًا، ومفيش أي حركة نقدية في الخزينة لأن الورق بيتحرك مش الكاش.</p>
+  </div>
+</div>
+<!-- cheque history modal -->
+<div class="modal-bg" id="chh-modal">
+  <div class="modal">
+    <h3>حركة الشيك</h3>
+    <div id="chh-info" class="muted" style="margin-bottom:8px"></div>
+    <div id="chh-list"></div>
+    <div class="row" style="margin-top:10px">
+      <button class="ghost" onclick="document.getElementById('chh-modal').style.display='none'">قفل</button>
+    </div>
+  </div>
+</div>
 <!-- update modal -->
 <div class="modal-bg" id="update-modal">
   <div class="modal">
@@ -598,7 +653,7 @@ async function doLogout(){
 }
 
 /* ---------- nav ---------- */
-const TAB_SEC = {dash:'accounts',accounts:'accounts',invoice:'accounts',payments:'accounts',statement:'accounts',treasury:'accounts',cheques:'accounts',inventory:'inventory',production:'production',settings:'settings',import:'settings',defs:'settings'};
+const TAB_SEC = {dash:'accounts',accounts:'accounts',invoice:'accounts',payments:'accounts',statement:'accounts',treasury:'accounts',cheques:'accounts',profit:'accounts',inventory:'inventory',production:'production',settings:'settings',import:'settings',defs:'settings'};
 const INV_TITLES = {materials:'المخزن - الخامات',soles:'المخزن - النعال',leather:'المخزن - الجلد (باكو)',ready:'المخزن - المخزون الجاهز',orders:'الإنتاج - أوامر الإنتاج',models:'الإنتاج - الموديلات'};
 function showSection(sec){
   showTab(sec==='settings'?'settings':sec==='inventory'?'inventory':sec==='production'?'production':'dash');
@@ -626,6 +681,10 @@ function showTab(t, kind){
   if(t==='payments') loadPayments();
   if(t==='treasury') loadTreasury();
   if(t==='cheques') loadCheques();
+  if(t==='profit'){
+    if(!document.getElementById('pr-month').value) document.getElementById('pr-month').value=today().slice(0,7);
+    loadProfit();
+  }
   if(t==='settings') loadSettings();
   if(t==='defs') loadEmployees();
 }
@@ -635,6 +694,7 @@ function setPartyKind(k){
   document.querySelectorAll('.cust-only').forEach(el=>el.style.display=(k==='customer')?'':'none');
   resetCustomerForm();
   loadCustomers();
+  fillPriceCustomers();
 }
 
 /* ---------- shared ---------- */
@@ -766,7 +826,7 @@ async function delCustomer(id){
 function addItemRow(it){
   it = it||{};
   const tr = document.createElement('tr');
-  tr.innerHTML = `<td><input class="it-name" value="${esc(it.item_name||'')}"></td>
+  tr.innerHTML = `<td><input class="it-name" value="${esc(it.item_name||'')}" onchange="priceLookup(this)"></td>
     <td><input class="it-color" value="${esc(it.color||'')}"></td>
     <td><input class="it-pairs num" type="number" min="0" step="1" value="${it.pairs??''}" oninput="calcInvoice()"></td>
     <td><input class="it-price num" type="number" min="0" step="0.01" value="${it.price??''}" oninput="calcInvoice()"></td>
@@ -792,11 +852,15 @@ function calcInvoice(){
   document.getElementById('i-pairs').textContent=fmt(pairs);
   document.getElementById('i-net').textContent=fmt(total+ship+other-disc);
 }
-function onInvoiceCustomer(){
+async function onInvoiceCustomer(){
   const c = customers.find(x=>x.id==v('i-customer'));
   if(c && c.discount_pct && KIND_PARTY[document.getElementById('i-kind').value]==='customer'){
     const {total}=readItems();
     document.getElementById('i-discount').value=(total*c.discount_pct/100).toFixed(2);
+  }
+  invoicePrices=[];
+  if(c && KIND_PARTY[document.getElementById('i-kind').value]==='customer'){
+    try{ invoicePrices=await api('/api/prices?customer_id='+c.id); }catch(e){}
   }
   calcInvoice();
 }
@@ -1145,22 +1209,148 @@ async function delTreasury(id){
 const CHEQUE_STATUS={pending:'تحت التحصيل',cashed:'تم الصرف',bounced:'مرتجع'};
 async function loadCheques(){
   const st=document.getElementById('ch-filter').value;
-  const list=await api('/api/cheques'+(st?'?status='+st:''));
-  const t0=today();
-  document.querySelector('#ch-table tbody').innerHTML=list.map(c=>`<tr${c.overdue?' style="background:#fee2e2"':''}>
+  const r=await api('/api/cheques'+(st?'?status='+st:''));
+  const list=r.cheques||[];
+  const t=r.totals||{};
+  document.getElementById('ch-totals').innerHTML=[
+    ['في إيدنا (تحت التحصيل)',fmt(t.in_hand||0)],['مظهّر لموردين',fmt(t.endorsed||0)],
+    ['تم الصرف',fmt(t.cashed||0)],['مرتجع',fmt(t.bounced||0)],
+  ].map(([tt,x])=>`<div class="card"><div class="t">${tt}</div><div class="v num">${x}</div></div>`).join('');
+  document.querySelector('#ch-table tbody').innerHTML=list.map(c=>{
+    let statusHtml;
+    if(c.status==='cashed') statusHtml='<span class="ok">تم الصرف</span>';
+    else if(c.status==='bounced') statusHtml='<span class="bad">مرتجع</span>';
+    else if(c.status==='endorsed') statusHtml='<span>مظهّر لمورد'+(c.endorsed_name?' ('+esc(c.endorsed_name)+')':'')+'</span>';
+    else statusHtml='تحت التحصيل';
+    let acts=`<button class="small ghost" onclick="chequeHistory(${c.id})">حركة الشيك</button>`;
+    if(c.status==='pending'){
+      acts=` <button class="small" onclick="setCheque(${c.id},'cashed')">تم الصرف</button> <button class="small danger" onclick="setCheque(${c.id},'bounced')">مرتجع</button>`+acts;
+      if(c.party_kind==='customer') acts=`<button class="small" onclick="openEndorse(${c.id})">تظهير لمورد</button>`+acts;
+    } else if(c.status==='endorsed'){
+      acts=` <button class="small" onclick="setCheque(${c.id},'cashed')">اتصرف عند المورد</button> <button class="small danger" onclick="setCheque(${c.id},'bounced')">مرتجع</button>`+acts;
+    } else {
+      acts=` <button class="small ghost" onclick="setCheque(${c.id},'pending')">إرجاع للانتظار</button>`+acts;
+    }
+    return `<tr${c.overdue?' style="background:#fee2e2"':''}>
     <td class="num ${c.overdue?'bad':''}"><b>${esc(c.due_date)}</b>${c.overdue?' (متأخر)':''}</td>
     <td>${esc(c.customer_name)}${c.party_kind==='supplier'?' (مورد)':''}</td>
     <td class="num"><b>${fmt(c.amount)}</b></td><td>${esc(c.bank)}</td><td class="num">${esc(c.cheque_number)}</td>
-    <td>${c.status==='cashed'?'<span class="ok">تم الصرف</span>':c.status==='bounced'?'<span class="bad">مرتجع</span>':'تحت التحصيل'}</td>
-    <td>${esc(c.notes)}</td>
-    <td style="white-space:nowrap">${c.status==='pending'
-      ?`<button class="small" onclick="setCheque(${c.id},'cashed')">تم الصرف</button> <button class="small danger" onclick="setCheque(${c.id},'bounced')">مرتجع</button>`
-      :`<button class="small ghost" onclick="setCheque(${c.id},'pending')">إرجاع للانتظار</button>`}</td></tr>`).join('');
+    <td>${statusHtml}</td>
+    <td>${esc(c.notes)}${c.status==='endorsed'&&c.endorsed_date?'<div class="muted">تظهير: '+esc(c.endorsed_date)+'</div>':''}</td>
+    <td style="white-space:nowrap">${acts}</td></tr>`;
+  }).join('');
+}
+let endorseChequeId=null, endorseCache={};
+async function openEndorse(cid){
+  const r=await api('/api/cheques');
+  const c=(r.cheques||[]).find(x=>x.id===cid);
+  if(!c){toast('الشيك مش موجود',true);return;}
+  endorseChequeId=cid; endorseCache=c;
+  const sups=await api('/api/customers?kind=supplier');
+  if(!sups.length){toast('ضيف موردين الأول من شاشة العملاء',true);return;}
+  document.getElementById('end-supplier').innerHTML=sups.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('');
+  document.getElementById('end-date').value=today();
+  document.getElementById('end-note').value='';
+  document.getElementById('end-info').innerHTML='شيك '+(esc(c.cheque_number)||'بدون رقم')+' - '+esc(c.customer_name)+' - <b class="num">'+fmt(c.amount)+'</b> جنيه - استحقاق '+esc(c.due_date);
+  document.getElementById('endorse-modal').style.display='flex';
+}
+async function saveEndorse(){
+  try{
+    await api('/api/cheques/'+endorseChequeId+'/endorse',{method:'POST',body:JSON.stringify({
+      supplier_id:+v('end-supplier'),date:v('end-date'),notes:v('end-note')})});
+    document.getElementById('endorse-modal').style.display='none';
+    toast('تم التظهير للمورد');
+    loadCheques();
+  }catch(e){toast(e.message,true);}
+}
+async function chequeHistory(cid){
+  const r=await api('/api/cheques');
+  const c=(r.cheques||[]).find(x=>x.id===cid);
+  const h=await api('/api/cheques/'+cid+'/history');
+  document.getElementById('chh-info').innerHTML=c
+    ?('شيك '+(esc(c.cheque_number)||'بدون رقم')+' - '+esc(c.customer_name)+' - <b class="num">'+fmt(c.amount)+'</b> جنيه'):'';
+  document.getElementById('chh-list').innerHTML=h.length
+    ? h.map(e=>`<div style="border-right:3px solid #0ea5e9;padding:4px 10px;margin-bottom:8px">
+        <div><b>${esc(e.event)}</b> <span class="muted num" style="font-size:12px">${esc((e.ts||'').replace('T',' ').slice(0,16))}</span></div>
+        ${e.detail?`<div class="muted" style="font-size:13px">${esc(e.detail)}</div>`:''}</div>`).join('')
+    : '<span class="muted">مفيش حركة مسجلة للشيك ده.</span>';
+  document.getElementById('chh-modal').style.display='flex';
 }
 async function setCheque(id,status){
   try{ await api('/api/cheques/'+id+'/status',{method:'POST',body:JSON.stringify({status})});
     toast('تم التحديث'); loadCheques(); }
   catch(e){ toast(e.message,true); }
+}
+
+/* ---------- price lists & profit & whatsapp ---------- */
+let currentPrices=[];
+async function fillPriceCustomers(){
+  const sel=document.getElementById('pl-customer');
+  if(!sel) return;
+  const r=await api('/api/customers?kind=customer');
+  const keep=sel.value;
+  sel.innerHTML='<option value="">اختر عميل...</option>'+r.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('');
+  if(keep) sel.value=keep;
+}
+async function loadPrices(){
+  const cid=v('pl-customer');
+  currentPrices=[];
+  document.querySelector('#pl-table tbody').innerHTML='';
+  if(!cid) return;
+  currentPrices=await api('/api/prices?customer_id='+cid);
+  document.querySelector('#pl-table tbody').innerHTML=currentPrices.map(p=>`<tr>
+    <td>${esc(p.item_name)}</td><td class="num"><b>${fmt(p.price)}</b></td>
+    <td><button class="small danger" onclick="delPrice(${p.id})">حذف</button></td></tr>`).join('');
+}
+async function savePrice(){
+  const cid=v('pl-customer');
+  if(!cid){toast('اختر العميل الأول',true);return;}
+  try{
+    await api('/api/prices',{method:'POST',body:JSON.stringify({customer_id:+cid,item_name:v('pl-item'),price:v('pl-price')||0})});
+    toast('تم حفظ السعر');
+    document.getElementById('pl-item').value=''; document.getElementById('pl-price').value='';
+    loadPrices();
+  }catch(e){toast(e.message,true);}
+}
+async function delPrice(id){
+  await api('/api/prices/'+id,{method:'DELETE'}); toast('تم الحذف'); loadPrices();
+}
+let invoicePrices=[];
+async function priceLookup(el){
+  const name=el.value.trim();
+  if(!name) return;
+  const tr=el.closest('tr');
+  const priceEl=tr.querySelector('.it-price');
+  const hit=invoicePrices.find(p=>p.item_name===name);
+  if(hit && !parseFloat(priceEl.value)){
+    priceEl.value=hit.price;
+    toast('سعر خاص للعميل: '+fmt(hit.price));
+    calcInvoice();
+  }
+}
+async function loadProfit(){
+  const m=document.getElementById('pr-month').value;
+  const r=await api('/api/profit'+(m?'?month='+m:''));
+  document.getElementById('pr-cards').innerHTML=[
+    ['المبيعات',fmt(r.sales)],['المرتجعات',fmt(r.returns)],['صافي المبيعات',fmt(r.net_sales)],
+    ['التحصيلات',fmt(r.collected)],['مدفوعات للموردين',fmt(r.paid_suppliers)],
+    ['المصروفات العامة',fmt(r.expenses_total)],['الربح التقريبي',fmt(r.gross)],
+  ].map(([t,x])=>`<div class="card"><div class="t">${t}</div><div class="v num">${x}</div></div>`).join('');
+  const ex=Object.entries(r.expenses||{});
+  document.getElementById('pr-expenses').innerHTML = ex.length
+    ? '<table><thead><tr><th>البند</th><th>المبلغ</th></tr></thead><tbody>'+
+      ex.map(([k,vv])=>`<tr><td>${esc(k)}</td><td class="num">${fmt(vv)}</td></tr>`).join('')+'</tbody></table>'
+    : '<span class="muted">لا توجد مصروفات في الفترة دي.</span>';
+}
+function shareStatementWhatsApp(){
+  if(!lastStatement){toast('اختر الطرف أولاً',true);return;}
+  const s=lastStatement;
+  const isSup = s.customer && s.customer.kind==='supplier';
+  const phone=(s.customer.phone||'').replace(/[^0-9]/g,'');
+  const txt='كشف حساب - '+s.customer.name+' - '+(isSup?'مستحق له':'المتبقي عليه')+': '+fmt(s.summary.remaining)+' جنيه - نظام نيكست للحسابات';
+  const url='https://wa.me/'+(phone||'')+'?text='+encodeURIComponent(txt);
+  window.open(url,'_blank');
+  toast('اتفتح واتساب بملخص الكشف - اطبع الكشف PDF وأرفقه في المحادثة');
 }
 
 /* ---------- master data ---------- */
