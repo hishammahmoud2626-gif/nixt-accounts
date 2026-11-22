@@ -143,7 +143,8 @@
   <button data-tab="dash" class="active" onclick="showTab('dash')">الرئيسية</button>
   <button data-tab="accounts" data-kind="customer" onclick="showTab('accounts','customer')">العملاء</button>
   <button data-tab="accounts" data-kind="supplier" onclick="showTab('accounts','supplier')">الموردين</button>
-  <button data-tab="invoice" onclick="showTab('invoice')">فاتورة</button>
+  <button data-tab="sales" onclick="showTab('sales')">المبيعات</button>
+  <button data-tab="purchases" onclick="showTab('purchases')">المشتريات</button>
   <button data-tab="payments" onclick="showTab('payments')">الدفعات</button>
   <button data-tab="statement" onclick="showTab('statement')">كشف حساب</button>
   <button data-tab="treasury" onclick="showTab('treasury')">الخزينة</button>
@@ -281,10 +282,51 @@
     </div>
   </section>
 
+  <!-- sales -->
+  <section id="tab-sales" class="hidden">
+    <div class="panel">
+      <div class="row" style="justify-content:space-between;align-items:center">
+        <h2 style="margin:0">المبيعات</h2>
+        <button onclick="newInvoiceFromSection('sale')">+ فاتورة بيع جديدة</button>
+      </div>
+      <p class="muted">كل فواتير البيع ومرتجعاتها في سجل واحد. لتسجيل مرتجع لفاتورة، دوس على ⚙ جنبها وهتتعبّى بياناتها لوحدها.</p>
+    </div>
+    <div class="panel">
+      <h2>سجل حركات المبيعات</h2>
+      <input class="search" id="sales-search" placeholder="بحث سريع..." oninput="filterTable('sales-table',this.value)">
+      <table id="sales-table"><thead><tr>
+        <th>التاريخ</th><th>النوع</th><th>العميل</th><th>أزواج</th><th>الصافي</th><th>تفاصيل</th><th></th>
+      </tr></thead><tbody></tbody></table>
+    </div>
+  </section>
+
+  <!-- purchases -->
+  <section id="tab-purchases" class="hidden">
+    <div class="panel">
+      <div class="row" style="justify-content:space-between;align-items:center">
+        <h2 style="margin:0">المشتريات</h2>
+        <button onclick="newInvoiceFromSection('purchase')">+ فاتورة شراء جديدة</button>
+      </div>
+      <p class="muted">كل فواتير الشراء ومرتجعاتها للموردين في سجل واحد. لتسجيل مرتجع لمورد، دوس على ⚙ جنب الفاتورة.</p>
+    </div>
+    <div class="panel">
+      <h2>سجل حركات المشتريات</h2>
+      <input class="search" id="purchases-search" placeholder="بحث سريع..." oninput="filterTable('purchases-table',this.value)">
+      <table id="purchases-table"><thead><tr>
+        <th>التاريخ</th><th>النوع</th><th>المورد</th><th>أزواج</th><th>الصافي</th><th>تفاصيل</th><th></th>
+      </tr></thead><tbody></tbody></table>
+    </div>
+  </section>
+
   <!-- invoice -->
   <section id="tab-invoice" class="hidden">
     <div class="panel">
-      <h2>فاتورة / مرتجع</h2>
+      <div class="row" style="justify-content:space-between;align-items:center">
+        <h2 style="margin:0">فاتورة / مرتجع</h2>
+        <button class="ghost" onclick="gearReturn()" title="تسجيل مرتجع من فاتورة موجودة">⚙ مرتجع من فاتورة</button>
+      </div>
+      <div id="i-return-banner" class="hidden" style="background:#fef9c3;border-radius:8px;padding:6px 10px;margin:6px 0;font-size:13px"></div>
+      <input type="hidden" id="i-return-of">
       <div class="row">
         <div class="field"><label>النوع</label><select id="i-kind" onchange="onInvoiceKind()">
           <option value="sale">فاتورة بيع</option><option value="return">مرتجع بيع</option>
@@ -332,7 +374,8 @@
         <div class="field"><label>التاريخ</label><input id="p-date" type="date"></div>
         <div class="field"><label>كاش</label><input id="p-cash" type="number" min="0" step="0.01" class="num" style="width:110px" value="0"></div>
         <div class="field"><label>شبكة</label><input id="p-card" type="number" min="0" step="0.01" class="num" style="width:110px" value="0"></div>
-        <div class="field"><label>تحويل</label><input id="p-transfer" type="number" min="0" step="0.01" class="num" style="width:110px" value="0"></div>
+        <div class="field"><label>تحويل بنكي</label><input id="p-transfer" type="number" min="0" step="0.01" class="num" style="width:110px" value="0"></div>
+        <div class="field"><label>فودافون كاش</label><input id="p-vcash" type="number" min="0" step="0.01" class="num" style="width:110px" value="0"></div>
         <div class="field"><label>شيك</label><input id="p-cheque" type="number" min="0" step="0.01" class="num" style="width:110px" value="0"></div>
         <div class="field"><label>ملاحظات</label><input id="p-notes" style="width:180px"></div>
         <button onclick="savePayment()">حفظ الدفعة</button>
@@ -347,7 +390,7 @@
       <h2>آخر الدفعات</h2>
       <input class="search" id="pay-search" placeholder="بحث سريع..." oninput="filterTable('pay-table',this.value)">
       <table id="pay-table"><thead><tr>
-        <th>التاريخ</th><th>الطرف</th><th>النوع</th><th>كاش</th><th>شبكة</th><th>تحويل</th><th>شيك</th><th>الإجمالي</th><th>ملاحظات</th><th></th>
+        <th>التاريخ</th><th>الطرف</th><th>النوع</th><th>كاش</th><th>شبكة</th><th>تحويل</th><th>ف.كاش</th><th>شيك</th><th>الإجمالي</th><th>ملاحظات</th><th></th>
       </tr></thead><tbody></tbody></table>
     </div>
   </section>
@@ -356,28 +399,92 @@
   <section id="tab-treasury" class="hidden">
     <div class="cards" id="tr-cards"></div>
     <div class="panel">
-      <h2>قيد جديد</h2>
+      <h2>دفعة عميل / مورد</h2>
       <div class="row">
-        <div class="field"><label>النوع</label><select id="tr-kind"><option value="in">قبض</option><option value="out">صرف (مصروف)</option></select></div>
-        <div class="field"><label>البند</label><input id="tr-cat" style="width:170px" placeholder="مثال: إيجار، عمالة، أدوات"></div>
-        <div class="field"><label>المبلغ *</label><input id="tr-amount" type="number" min="0" step="0.01" class="num" style="width:120px"></div>
+        <button onclick="openTreasuryPayment('in')">تحصيل من عميل</button>
+        <button onclick="openTreasuryPayment('out')">دفع لمورد</button>
+        <span class="muted">بتتسجّل في الدفعات وبتأثر في كشف حساب الطرف وقناة الدفع تلقائيًا - ممنوع تسجيلها يدوي تاني عشان متتكررش.</span>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>قيد يدوي (مصروفات ونثريات)</h2>
+      <div class="row">
+        <div class="field"><label>النوع</label><select id="tr-kind"><option value="out">صرف (مصروف)</option><option value="in">قبض</option></select></div>
+        <div class="field"><label>القناة</label><select id="tr-method"><option value="cash">كاش</option><option value="vcash">فودافون كاش</option><option value="transfer">تحويل بنكي</option><option value="card">شبكة</option></select></div>
+        <div class="field"><label>البند</label><input id="tr-cat" style="width:160px" placeholder="مثال: إيجار، عمالة، أدوات"></div>
+        <div class="field"><label>المبلغ *</label><input id="tr-amount" type="number" min="0" step="0.01" class="num" style="width:110px"></div>
         <div class="field"><label>التاريخ</label><input id="tr-date" type="date"></div>
-        <div class="field"><label>ملاحظات</label><input id="tr-notes" style="width:170px"></div>
+        <div class="field"><label>ملاحظات</label><input id="tr-notes" style="width:150px"></div>
         <button onclick="saveTreasury()">حفظ القيد</button>
       </div>
     </div>
     <div class="panel">
-      <h2>قيود الخزينة</h2>
+      <h2>حركات الخزينة</h2>
       <div class="row">
         <div class="field"><label>الشهر</label><input id="tr-month" type="month" onchange="loadTreasury()"></div>
-        <button class="ghost" onclick="document.getElementById('tr-month').value='';loadTreasury()">الكل</button>
+        <div class="field"><label>القناة</label><select id="tr-fmethod" onchange="renderTreasury()">
+          <option value="">كل القنوات</option><option value="cash">كاش</option><option value="vcash">فودافون كاش</option>
+          <option value="transfer">تحويل بنكي</option><option value="card">شبكة</option><option value="cheque">شيكات</option>
+        </select></div>
+        <div class="field"><label>النوع</label><select id="tr-fkind" onchange="renderTreasury()">
+          <option value="">قبض وصرف</option><option value="in">قبض فقط</option><option value="out">صرف فقط</option>
+        </select></div>
+        <div class="field"><label>المصدر</label><select id="tr-fsrc" onchange="renderTreasury()">
+          <option value="">كل المصادر</option><option value="payment">دفعات العملاء/الموردين</option><option value="cheque">شيكات محصلة</option><option value="manual">قيود يدوية</option>
+        </select></div>
+        <button class="ghost" onclick="clearTreasuryFilters()">مسح الفلاتر</button>
       </div>
-      <input class="search" id="tr-search" placeholder="بحث سريع..." oninput="filterTable('tr-table',this.value)">
+      <input class="search" id="tr-search" placeholder="بحث باسم الطرف أو البند أو الملاحظات..." oninput="renderTreasury()">
       <table id="tr-table"><thead><tr>
-        <th>التاريخ</th><th>النوع</th><th>البند</th><th>المبلغ</th><th>ملاحظات</th><th>المصدر</th><th></th>
+        <th>التاريخ</th><th>النوع</th><th>القناة</th><th>البند</th><th>الطرف</th><th>المبلغ</th><th>ملاحظات</th><th></th>
       </tr></thead><tbody></tbody></table>
     </div>
   </section>
+
+  <!-- treasury payment modal -->
+  <div class="modal-bg" id="tpay-modal">
+    <div class="modal">
+      <h3 id="tpay-title">تحصيل من عميل</h3>
+      <div class="field"><label>الطرف *</label><select id="pm-customer"></select></div>
+      <div class="row">
+        <div class="field"><label>التاريخ</label><input id="pm-date" type="date"></div>
+      </div>
+      <div class="row">
+        <div class="field"><label>كاش</label><input id="pm-cash" type="number" min="0" step="0.01" class="num" style="width:100px" value="0"></div>
+        <div class="field"><label>فودافون كاش</label><input id="pm-vcash" type="number" min="0" step="0.01" class="num" style="width:100px" value="0"></div>
+      </div>
+      <div class="row">
+        <div class="field"><label>تحويل بنكي</label><input id="pm-transfer" type="number" min="0" step="0.01" class="num" style="width:100px" value="0"></div>
+        <div class="field"><label>شبكة</label><input id="pm-card" type="number" min="0" step="0.01" class="num" style="width:100px" value="0"></div>
+      </div>
+      <div class="row">
+        <div class="field"><label>شيك</label><input id="pm-cheque" type="number" min="0" step="0.01" class="num" style="width:100px" value="0"></div>
+        <div class="field"><label>ملاحظات</label><input id="pm-notes" style="width:150px"></div>
+      </div>
+      <div class="row" id="pm-cheque-meta" style="display:none">
+        <div class="field"><label>استحقاق الشيك *</label><input id="pm-cheque-due" type="date"></div>
+        <div class="field"><label>البنك</label><input id="pm-cheque-bank" style="width:120px"></div>
+        <div class="field"><label>رقم الشيك</label><input id="pm-cheque-number" class="num" style="width:110px"></div>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button onclick="saveTreasuryPayment()">حفظ الدفعة</button>
+        <button class="ghost" onclick="document.getElementById('tpay-modal').style.display='none'">إلغاء</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- return-from-invoice modal -->
+  <div class="modal-bg" id="ret-modal">
+    <div class="modal">
+      <h3>تسجيل مرتجع من فاتورة</h3>
+      <div class="field"><label>اختر الفاتورة الأصلية</label><select id="ret-invoice" style="width:100%"></select></div>
+      <div class="row" style="margin-top:10px">
+        <button onclick="applyReturn()">تحميل بيانات المرتجع</button>
+        <button class="ghost" onclick="document.getElementById('ret-modal').style.display='none'">إلغاء</button>
+      </div>
+      <p class="muted">هتتعبّى الفاتورة كمرتجع بنفس الأصناف والأسعار - عدّل الكميات واكتب سبب المرتجع وبعدين احفظ.</p>
+    </div>
+  </div>
 
   <!-- cheques -->
   <section id="tab-cheques" class="hidden">
@@ -417,14 +524,21 @@
   <section id="tab-statement" class="hidden">
     <div class="panel">
       <div class="row">
-        <div class="field"><label>العميل / المورد</label><select id="s-customer" style="width:240px" onchange="loadStatement()"></select></div>
-        <button class="ghost" onclick="printStatement()">طباعة الكشف</button>
+        <div class="field"><label>العميل / المورد</label><select id="s-customer" style="width:220px" onchange="loadStatement()"></select></div>
+        <div class="field"><label>من</label><input id="s-from" type="date" onchange="loadStatement()"></div>
+        <div class="field"><label>إلى</label><input id="s-to" type="date" onchange="loadStatement()"></div>
+        <div class="field"><label>النوع</label><select id="s-ftype" onchange="renderStatementLines()">
+          <option value="">كل الحركات</option><option value="inv">فواتير</option><option value="ret">مرتجعات</option><option value="pay">دفعات وشيكات</option>
+        </select></div>
+        <button class="ghost" onclick="printStatement(false)">طباعة الظاهر</button>
+        <button onclick="printStatement(true)">طباعة المحدد</button>
         <button class="ghost" onclick="shareStatementWhatsApp()">مشاركة واتساب</button>
-        <span class="muted">لحفظ PDF: من نافذة الطباعة اختر "حفظ كـ PDF"</span>
       </div>
+      <p class="muted">حدّد اللي عاوز تطبعه بعلامة ✓ من أول الجدول، أو اطبع الظاهر بعد الفلترة. لحفظ PDF: من نافذة الطباعة اختر "حفظ كـ PDF".</p>
       <div class="cards" id="s-cards"></div>
       <table id="s-table"><thead><tr>
-        <th>التاريخ</th><th>البيان</th><th>مدين</th><th>دائن</th><th>الرصيد</th>
+        <th><input type="checkbox" id="s-all" onchange="toggleAllStatement(this.checked)"></th>
+        <th>التاريخ</th><th>النوع</th><th>البيان</th><th>مدين</th><th>دائن</th><th>الرصيد</th>
       </tr></thead><tbody></tbody></table>
     </div>
   </section>
@@ -653,7 +767,7 @@ async function doLogout(){
 }
 
 /* ---------- nav ---------- */
-const TAB_SEC = {dash:'accounts',accounts:'accounts',invoice:'accounts',payments:'accounts',statement:'accounts',treasury:'accounts',cheques:'accounts',profit:'accounts',inventory:'inventory',production:'production',settings:'settings',import:'settings',defs:'settings'};
+const TAB_SEC = {dash:'accounts',accounts:'accounts',invoice:'accounts',sales:'accounts',purchases:'accounts',payments:'accounts',statement:'accounts',treasury:'accounts',cheques:'accounts',profit:'accounts',inventory:'inventory',production:'production',settings:'settings',import:'settings',defs:'settings'};
 const INV_TITLES = {materials:'المخزن - الخامات',soles:'المخزن - النعال',leather:'المخزن - الجلد (باكو)',ready:'المخزن - المخزون الجاهز',orders:'الإنتاج - أوامر الإنتاج',models:'الإنتاج - الموديلات'};
 function showSection(sec){
   showTab(sec==='settings'?'settings':sec==='inventory'?'inventory':sec==='production'?'production':'dash');
@@ -678,6 +792,8 @@ function showTab(t, kind){
   if(t==='dash') loadDash();
   if(t==='accounts') setPartyKind(partyKind);
   if(t==='invoice') loadInvoices();
+  if(t==='sales') loadMovements('sale');
+  if(t==='purchases') loadMovements('purchase');
   if(t==='payments') loadPayments();
   if(t==='treasury') loadTreasury();
   if(t==='cheques') loadCheques();
@@ -870,18 +986,23 @@ async function saveInvoice(andPrint){
   const kind=document.getElementById('i-kind').value;
   const body={customer_id:+cid, date:v('i-date')||today(), kind,
     shipping:v('i-shipping')||0, other_charges:v('i-other')||0, discount:v('i-discount')||0,
-    notes:v('i-notes'), reason:v('i-reason'), items};
+    notes:v('i-notes'), reason:v('i-reason'), return_of:v('i-return-of')||null, items};
   try{
     const r=await api('/api/invoices',{method:'POST',body:JSON.stringify(body)});
     toast('تم حفظ '+KIND_LABEL[kind]+' رقم '+r.id);
+    const wasReturn=(kind==='return'||kind==='purchase_return');
     resetInvoiceForm(); loadInvoices(); refreshCustomers();
     if(andPrint) printInvoice(r.id);
+    if(wasReturn) showTab(kind==='return'?'sales':'purchases');
   }catch(e){toast(e.message,true);}
 }
 function resetInvoiceForm(){
   document.getElementById('i-items').innerHTML=''; addItemRow();
   for(const id of ['i-shipping','i-other','i-discount']) document.getElementById(id).value=0;
-  document.getElementById('i-notes').value=''; document.getElementById('i-reason').value=''; calcInvoice();
+  document.getElementById('i-notes').value=''; document.getElementById('i-reason').value='';
+  document.getElementById('i-return-of').value='';
+  document.getElementById('i-return-banner').classList.add('hidden');
+  calcInvoice();
 }
 async function loadInvoices(){
   await refreshCustomers();
@@ -944,21 +1065,21 @@ async function loadPayments(){
   document.querySelector('#pay-table tbody').innerHTML=pays.slice(0,80).map(p=>`<tr>
     <td class="num">${p.date}</td><td>${esc(p.customer_name)}</td>
     <td>${p.party_kind==='supplier'?'دفع لمورد':'قبض'}</td>
-    <td class="num">${fmt(p.cash)}</td><td class="num">${fmt(p.card)}</td><td class="num">${fmt(p.transfer)}</td><td class="num">${fmt(p.cheque)}</td>
+    <td class="num">${fmt(p.cash)}</td><td class="num">${fmt(p.card)}</td><td class="num">${fmt(p.transfer)}</td><td class="num">${fmt(p.vcash)}</td><td class="num">${fmt(p.cheque)}</td>
     <td class="num"><b>${fmt(p.total)}</b></td><td>${esc(p.notes)}</td>
     <td><button class="small danger" ${currentUser.role!=='admin'?'style="display:none"':''} onclick="delPayment(${p.id})">حذف</button></td></tr>`).join('');
   filterTable('pay-table', document.getElementById('pay-search').value);
 }
 async function savePayment(){
   const cid=v('p-customer'); if(!cid){toast('اختر الطرف أولاً',true);return;}
-  const body={customer_id:+cid,date:v('p-date')||today(),cash:v('p-cash')||0,card:v('p-card')||0,transfer:v('p-transfer')||0,cheque:v('p-cheque')||0,notes:v('p-notes'),
+  const body={customer_id:+cid,date:v('p-date')||today(),cash:v('p-cash')||0,card:v('p-card')||0,transfer:v('p-transfer')||0,vcash:v('p-vcash')||0,cheque:v('p-cheque')||0,notes:v('p-notes'),
     cheque_due:v('p-cheque-due'),cheque_bank:v('p-cheque-bank'),cheque_number:v('p-cheque-number')};
-  if(!(+body.cash||+body.card||+body.transfer||+body.cheque)){toast('اكتب مبلغ الدفعة',true);return;}
+  if(!(+body.cash||+body.card||+body.transfer||+body.vcash||+body.cheque)){toast('اكتب مبلغ الدفعة',true);return;}
   if(+body.cheque&&!body.cheque_due){toast('اكتب تاريخ استحقاق الشيك',true);return;}
   try{
     await api('/api/payments',{method:'POST',body:JSON.stringify(body)});
     toast('تم حفظ الدفعة');
-    for(const id of ['p-cash','p-card','p-transfer','p-cheque']) document.getElementById(id).value=0;
+    for(const id of ['p-cash','p-card','p-transfer','p-vcash','p-cheque']) document.getElementById(id).value=0;
     for(const id of ['p-cheque-due','p-cheque-bank','p-cheque-number']) document.getElementById(id).value='';
     document.getElementById('p-notes').value='';
     loadPayments();
@@ -972,9 +1093,14 @@ async function delPayment(id){
 /* ---------- statement ---------- */
 let lastStatement=null;
 function openStatement(cid){ showTab('statement'); document.getElementById('s-customer').value=cid; loadStatement(); }
+const ST_TYPE={sale:'فاتورة بيع',return:'مرتجع بيع',purchase:'فاتورة شراء',purchase_return:'مرتجع شراء',payment:'دفعة',ledger:'قيد',opening:'افتتاحي',carried:'رصيد مرحّل'};
+function stGroup(t){ if(t==='sale'||t==='purchase')return'inv'; if(t==='return'||t==='purchase_return')return'ret'; if(t==='payment')return'pay'; return''; }
 async function loadStatement(){
   const cid=v('s-customer'); if(!cid) return;
-  const s=await api('/api/statement?customer_id='+cid);
+  let url='/api/statement?customer_id='+cid;
+  if(v('s-from')) url+='&from='+v('s-from');
+  if(v('s-to')) url+='&to='+v('s-to');
+  const s=await api(url);
   lastStatement=s;
   const isSup = s.customer && s.customer.kind==='supplier';
   document.getElementById('s-cards').innerHTML=[
@@ -982,21 +1108,44 @@ async function loadStatement(){
     ['المرتجعات',fmt(s.summary.returns)],[isSup?'مستحق له':'المتبقي عليه',fmt(s.summary.remaining)],
     ['الأزواج',fmt(s.summary.pairs)],
   ].map(([t,x])=>`<div class="card"><div class="t">${t}</div><div class="v num">${x}</div></div>`).join('');
-  document.querySelector('#s-table tbody').innerHTML=s.lines.map(l=>`<tr>
-    <td class="num">${l.date}</td><td>${esc(l.desc)}</td>
-    <td class="num">${l.debit?fmt(l.debit):''}</td><td class="num">${l.credit?fmt(l.credit):''}</td>
-    <td class="num ${l.balance>0?'bad':'ok'}"><b>${fmt(l.balance)}</b></td></tr>`).join('');
+  renderStatementLines();
 }
-function printStatement(){
+function renderStatementLines(){
+  if(!lastStatement) return;
+  const g=document.getElementById('s-ftype').value;
+  lastStatement.lines.forEach((l,i)=>{ l._grp=stGroup(l.type); });
+  document.querySelector('#s-table tbody').innerHTML=lastStatement.lines.map((l,i)=>{
+    if(g && l._grp!==g) return '';
+    return `<tr>
+    <td><input type="checkbox" class="s-chk" data-i="${i}"></td>
+    <td class="num">${l.date}</td><td class="muted" style="font-size:12px">${ST_TYPE[l.type]||esc(l.type)}</td><td>${esc(l.desc)}</td>
+    <td class="num">${l.debit?fmt(l.debit):''}</td><td class="num">${l.credit?fmt(l.credit):''}</td>
+    <td class="num ${l.balance>0?'bad':'ok'}"><b>${fmt(l.balance)}</b></td></tr>`;
+  }).join('');
+}
+function toggleAllStatement(on){
+  document.querySelectorAll('.s-chk').forEach(c=>c.checked=on);
+}
+function printStatement(onlySelected){
   if(!lastStatement){toast('اختر الطرف أولاً',true);return;}
   const s=lastStatement;
+  let idx;
+  if(onlySelected){
+    idx=[...document.querySelectorAll('.s-chk')].filter(c=>c.checked).map(c=>+c.dataset.i);
+    if(!idx.length){toast('حدّد سطور الأول بعلامة ✓',true);return;}
+  } else {
+    const g=document.getElementById('s-ftype').value;
+    idx=s.lines.map((l,i)=>i).filter(i=>!g||s.lines[i]._grp===g||stGroup(s.lines[i].type)===g);
+  }
+  const lines=idx.map(i=>s.lines[i]);
   const isSup = s.customer && s.customer.kind==='supplier';
-  const rows=s.lines.map(l=>`<tr><td class="num">${l.date}</td><td>${esc(l.desc)}</td>
+  const rows=lines.map(l=>`<tr><td class="num">${l.date}</td><td>${esc(l.desc)}</td>
     <td class="num">${l.debit?fmt(l.debit):''}</td><td class="num">${l.credit?fmt(l.credit):''}</td>
     <td class="num"><b>${fmt(l.balance)}</b></td></tr>`).join('');
+  const period=(v('s-from')||v('s-to'))?` - الفترة من ${v('s-from')||'البداية'} إلى ${v('s-to')||'النهاردة'}`:'';
   showPrint(`<div class="doc">
     ${companyHeader(s.company||{}, 'كشف حساب')}
-    <div class="sub">${isSup?'المورد':'العميل'}: <b>${esc(s.customer?s.customer.name:'')}</b> — بتاريخ <span class="num">${today()}</span></div>
+    <div class="sub">${isSup?'المورد':'العميل'}: <b>${esc(s.customer?s.customer.name:'')}</b> — بتاريخ <span class="num">${today()}</span>${period}${onlySelected?' - سطور مختارة':''}</div>
     <table><thead><tr><th>التاريخ</th><th>البيان</th><th>مدين</th><th>دائن</th><th>الرصيد</th></tr></thead>
     <tbody>${rows}</tbody></table>
     <table style="width:60%;margin-right:auto">
@@ -1177,23 +1326,143 @@ async function wipeData(){
     refreshCustomers();
   }catch(e){ out.textContent='فشل: '+e.message; }
 }
+/* ---------- sales / purchases movements & returns ---------- */
+let allInvoices=[];
+function newInvoiceFromSection(kind){
+  showTab('invoice');
+  document.getElementById('i-kind').value=kind;
+  resetInvoiceForm();
+  document.getElementById('i-return-of').value='';
+  document.getElementById('i-return-banner').classList.add('hidden');
+  onInvoiceKind();
+}
+async function loadMovements(kind){
+  await refreshCustomers();
+  allInvoices = await api('/api/invoices');
+  const ret = kind==='sale'?'return':'purchase_return';
+  const list = allInvoices.filter(i=>i.kind===kind||i.kind===ret);
+  const tbl = kind==='sale'?'sales-table':'purchases-table';
+  document.querySelector('#'+tbl+' tbody').innerHTML=list.map(i=>{
+    const isRet=i.kind===ret;
+    let det='';
+    if(isRet){ det=esc(i.reason||''); if(i.return_of) det+=(det?' ':'')+'(مرتبطة بفاتورة #'+i.return_of+')'; }
+    else if(i.notes) det=esc(i.notes);
+    return `<tr>
+    <td class="num">${i.date}</td>
+    <td>${isRet?'<span class="bad">'+KIND_LABEL[i.kind]+'</span>':KIND_LABEL[i.kind]}</td>
+    <td>${esc(i.customer_name)}</td>
+    <td class="num">${fmt(i.pairs)}</td><td class="num"><b>${fmt(i.net)}</b></td>
+    <td>${det}</td>
+    <td style="white-space:nowrap">
+      ${!isRet?`<button class="small" title="تسجيل مرتجع من الفاتورة دي" onclick="startReturn(${i.id})">⚙ مرتجع</button>`:''}
+      <button class="small ghost" onclick="openStatement(${i.customer_id})">كشف</button>
+      <button class="small ghost" onclick="printInvoice(${i.id})">طباعة</button></td></tr>`;
+  }).join('');
+  filterTable(tbl, document.getElementById(kind==='sale'?'sales-search':'purchases-search').value);
+}
+function gearReturn(){
+  const k=document.getElementById('i-kind').value;
+  const base=(k==='purchase'||k==='purchase_return')?'purchase':'sale';
+  const list=allInvoices.filter(i=>i.kind===base);
+  if(!list.length){toast('مفيش فواتير '+(base==='sale'?'بيع':'شراء')+' لسه',true);return;}
+  document.getElementById('ret-invoice').innerHTML=list.map(i=>
+    `<option value="${i.id}">#${i.id} - ${i.date} - ${esc(i.customer_name)} - ${fmt(i.net)} جنيه</option>`).join('');
+  document.getElementById('ret-modal').style.display='flex';
+}
+function applyReturn(){
+  const id=+v('ret-invoice');
+  document.getElementById('ret-modal').style.display='none';
+  if(id) startReturn(id);
+}
+async function startReturn(id){
+  const inv=await api('/api/invoices/'+id);
+  if(!inv||!inv.id){toast('الفاتورة مش موجودة',true);return;}
+  const retKind = inv.kind==='sale'?'return':inv.kind==='purchase'?'purchase_return':null;
+  if(!retKind){toast('المرتجع بيتعمل من فاتورة بيع أو شراء',true);return;}
+  showTab('invoice');
+  document.getElementById('i-kind').value=retKind;
+  onInvoiceKind();
+  document.getElementById('i-customer').value=inv.customer_id;
+  document.getElementById('i-date').value=today();
+  document.getElementById('i-items').innerHTML='';
+  (inv.items||[]).forEach(it=>addItemRow({item_name:it.item_name,color:it.color,pairs:it.pairs,price:it.price}));
+  document.getElementById('i-shipping').value=0;
+  document.getElementById('i-other').value=0;
+  document.getElementById('i-discount').value=0;
+  document.getElementById('i-notes').value='';
+  document.getElementById('i-reason').value='';
+  document.getElementById('i-return-of').value=inv.id;
+  const bn=document.getElementById('i-return-banner');
+  bn.textContent='مرتجع للفاتورة #'+inv.id+' ('+esc(inv.customer_name||'')+') - عدّل الكميات واكتب السبب واحفظ';
+  bn.classList.remove('hidden');
+  calcInvoice();
+  toast('حمّلنا الفاتورة كمرتجع - راجع واحفظ');
+}
+
 /* ---------- treasury & cheques ---------- */
+const TR_METHOD={cash:'كاش',vcash:'فودافون كاش',transfer:'تحويل بنكي',card:'شبكة',cheque:'شيك'};
+let trAll=[];
 async function loadTreasury(){
   const m=document.getElementById('tr-month').value;
   const r=await api('/api/treasury'+(m?'?month='+m:''));
-  document.getElementById('tr-cards').innerHTML=[
-    ['مقبوضات',fmt(r.total_in)],['مصروفات ومدفوعات',fmt(r.total_out)],['صافي الخزينة',fmt(r.net)],
-  ].map(([t,x])=>`<div class="card"><div class="t">${t}</div><div class="v num">${x}</div></div>`).join('');
-  document.querySelector('#tr-table tbody').innerHTML=r.entries.map(e=>`<tr>
+  trAll=r.entries||[];
+  const bm=r.by_method||{};
+  const ch=(mkey,label)=>{const b=bm[mkey]||{in:0,out:0,net:0};return `<div class="card"><div class="t">${label}</div><div class="v num">${fmt(b.net)}</div><div class="muted num" style="font-size:11px">في ${fmt(b.in)} / من ${fmt(b.out)}</div></div>`;};
+  document.getElementById('tr-cards').innerHTML=
+    ch('cash','كاش')+ch('vcash','فودافون كاش')+ch('transfer','تحويل بنكي')+ch('card','شبكة')+ch('cheque','شيكات محصلة')+
+    `<div class="card" style="background:#0c4a6e;color:#fff"><div class="t" style="color:#bae6fd">صافي الخزينة</div><div class="v num">${fmt(r.net)}</div><div style="font-size:11px;color:#bae6fd" class="num">قبض ${fmt(r.total_in)} / صرف ${fmt(r.total_out)}</div></div>`;
+  renderTreasury();
+}
+function renderTreasury(){
+  const fm=document.getElementById('tr-fmethod').value;
+  const fk=document.getElementById('tr-fkind').value;
+  const fs=document.getElementById('tr-fsrc').value;
+  const q=(document.getElementById('tr-search').value||'').trim();
+  const list=trAll.filter(e=>(!fm||e.method===fm)&&(!fk||e.kind===fk)&&(!fs||e.source===fs)
+    &&(!q||(e.category||'').includes(q)||(e.notes||'').includes(q)||(e.party_name||'').includes(q)));
+  document.querySelector('#tr-table tbody').innerHTML=list.map(e=>`<tr>
     <td class="num">${e.date}</td><td>${e.kind==='in'?'<span class="ok">قبض</span>':'<span class="bad">صرف</span>'}</td>
-    <td>${esc(e.category)}</td><td class="num"><b>${fmt(e.amount)}</b></td><td>${esc(e.notes)}</td>
-    <td class="muted">${e.source==='manual'?'يدوي':e.source==='payment'?'من دفعة':'من شيك'}</td>
+    <td>${TR_METHOD[e.method]||esc(e.method)}</td>
+    <td>${esc(e.category)}</td><td>${esc(e.party_name||'')}</td>
+    <td class="num"><b>${fmt(e.amount)}</b></td><td>${esc(e.notes)}</td>
     <td>${e.source==='manual'&&currentUser.role==='admin'?`<button class="small danger" onclick="delTreasury(${e.id})">حذف</button>`:''}</td></tr>`).join('');
-  filterTable('tr-table', document.getElementById('tr-search').value);
+}
+function clearTreasuryFilters(){
+  for(const id of ['tr-fmethod','tr-fkind','tr-fsrc']) document.getElementById(id).value='';
+  document.getElementById('tr-search').value=''; renderTreasury();
+}
+let tpayDir='in';
+function openTreasuryPayment(dir){
+  tpayDir=dir;
+  document.getElementById('tpay-title').textContent = dir==='in'?'تحصيل من عميل':'دفع لمورد';
+  const kind = dir==='in'?'customer':'supplier';
+  const list = customers.filter(c=>c.kind===kind);
+  if(!list.length){toast(kind==='customer'?'ضيف عميل الأول':'ضيف مورد الأول',true);return;}
+  document.getElementById('pm-customer').innerHTML=list.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('');
+  document.getElementById('pm-date').value=today();
+  for(const id of ['pm-cash','pm-card','pm-transfer','pm-vcash','pm-cheque']) document.getElementById(id).value=0;
+  for(const id of ['pm-cheque-due','pm-cheque-bank','pm-cheque-number','pm-notes']) document.getElementById(id).value='';
+  document.getElementById('pm-cheque-meta').style.display='none';
+  document.getElementById('tpay-modal').style.display='flex';
+}
+async function saveTreasuryPayment(){
+  const body={customer_id:+v('pm-customer'),date:v('pm-date')||today(),direction:tpayDir,
+    cash:v('pm-cash')||0,card:v('pm-card')||0,transfer:v('pm-transfer')||0,vcash:v('pm-vcash')||0,
+    cheque:v('pm-cheque')||0,notes:v('pm-notes'),
+    cheque_due:v('pm-cheque-due'),cheque_bank:v('pm-cheque-bank'),cheque_number:v('pm-cheque-number')};
+  if(!(+body.cash||+body.card||+body.transfer||+body.vcash||+body.cheque)){toast('اكتب مبلغ الدفعة',true);return;}
+  if(+body.cheque&&!body.cheque_due){toast('اكتب تاريخ استحقاق الشيك',true);return;}
+  try{
+    await api('/api/payments',{method:'POST',body:JSON.stringify(body)});
+    document.getElementById('tpay-modal').style.display='none';
+    toast('تم حفظ الدفعة');
+    refreshCustomers(); loadTreasury();
+  }catch(e){toast(e.message,true);}
 }
 async function saveTreasury(){
   const body={kind:document.getElementById('tr-kind').value,category:v('tr-cat'),
-    amount:v('tr-amount')||0,date:v('tr-date')||today(),notes:v('tr-notes')};
+    amount:v('tr-amount')||0,date:v('tr-date')||today(),notes:v('tr-notes'),
+    method:document.getElementById('tr-method').value};
   try{
     await api('/api/treasury',{method:'POST',body:JSON.stringify(body)});
     toast('تم حفظ القيد');
@@ -1281,6 +1550,11 @@ async function setCheque(id,status){
     toast('تم التحديث'); loadCheques(); }
   catch(e){ toast(e.message,true); }
 }
+
+document.addEventListener('input',e=>{
+  if(e.target && e.target.id==='pm-cheque')
+    document.getElementById('pm-cheque-meta').style.display = (+e.target.value>0)?'flex':'none';
+});
 
 /* ---------- price lists & profit & whatsapp ---------- */
 let currentPrices=[];
