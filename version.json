@@ -1,5 +1,5 @@
 {
-  "version": "2.0.0",
-  "zip_url": "https://github.com/hishammahmoud2626-gif/nixt-accounts/releases/download/v2.0.0/NixtAccounts-2.0.0-Portable.zip",
-  "notes": "وضع الموبايل (عرض فقط): شغّل الوصول من الموبايل في الإعدادات وامسح كود الـ QR من موبايلك على نفس الواي فاي أو عبر Tailscale، وهتشوف الأرصدة والعملاء والموردين والفواتير بتصميم موبايل جديد — عرض فقط وممنوع أي تعديل. وفيه تطبيق أندرويد NixtMobile بيربط بنفس المفتاح."
+  "version": "2.1.0",
+  "zip_url": "https://github.com/hishammahmoud2626-gif/nixt-accounts/releases/download/v2.1.0/NixtAccounts-2.1.0-Portable.zip",
+  "notes": "المزامنة مع جوجل درايف (عرض فقط): اربط حساب جوجل من الإعدادات، والبرنامج بيرفع نسخة لحظية من بياناتك على مجلد مخفي في درايف. تطبيق الموبايل NixtMobile 2.1.0 بيعرض النسخة دي تلقائيًا لما الكمبيوتر يكون مقفول. التحديث بيتم من زرار التحديث داخل البرنامج."
 }
