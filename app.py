@@ -31,7 +31,7 @@ from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-APP_VERSION = "1.8.0"
+APP_VERSION = "1.9.0"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -1471,10 +1471,14 @@ class API:
             return 404, {"error": "not found"}
         inv = dict(inv)
         inv["items"] = rows(conn.execute("SELECT * FROM invoice_items WHERE invoice_id=?", (iid,)))
+        for it in inv["items"]:
+            r = conn.execute("SELECT retail_price FROM items WHERE name=?", (it["item_name"],)).fetchone()
+            it["retail_price"] = r["retail_price"] if r else None
         inv["items_total"] = round(sum(i["pairs"] * i["price"] for i in inv["items"]), 2)
         inv["net"] = round(invoice_net(iid, conn), 2)
         cust = conn.execute("SELECT * FROM customers WHERE id=?", (inv["customer_id"],)).fetchone()
         inv["customer"] = dict(cust) if cust else None
+        inv["party_balance"] = round(party_balance(conn, inv["customer_id"]), 2)
         st = {k: get_setting(conn, k, v) for k, v in DEFAULT_SETTINGS.items()}
         inv["company"] = st
         conn.close()
@@ -1759,6 +1763,24 @@ class API:
         out["debtors"] = debtors[:10]
         out["creditors"] = creditors[:10]
         out["alerts"] = {"over_limit": over_limit, "stale": stale[:10]}
+        # charts: monthly sales for the last 6 months, top models, deltas
+        month_keys = []
+        d0 = today_d.replace(day=1)
+        for _ in range(6):
+            month_keys.append(d0.strftime("%Y-%m"))
+            d0 = (d0 - timedelta(days=1)).replace(day=1)
+        month_keys.reverse()
+        mon_sales = {k: 0.0 for k in month_keys}
+        for inv in conn.execute("SELECT id, date FROM invoices WHERE kind='sale'"):
+            k = (inv["date"] or "")[:7]
+            if k in mon_sales:
+                mon_sales[k] += invoice_net(inv["id"], conn)
+        out["monthly_sales"] = [{"month": k, "total": round(mon_sales[k], 2)} for k in month_keys]
+        top = conn.execute(
+            "SELECT ii.item_name n, SUM(ii.pairs) p FROM invoice_items ii"
+            " JOIN invoices i ON i.id=ii.invoice_id WHERE i.kind='sale'"
+            " GROUP BY ii.item_name ORDER BY p DESC LIMIT 5").fetchall()
+        out["top_models"] = [{"name": r["n"], "pairs": round(r["p"] or 0, 2)} for r in top]
         soon7 = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d")
         out["cheques_due"] = rows(conn.execute(
             "SELECT c.*, cu.name AS customer_name FROM cheques c JOIN customers cu ON cu.id=c.customer_id"
