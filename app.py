@@ -31,7 +31,7 @@ from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-APP_VERSION = "1.6.0"
+APP_VERSION = "1.7.0"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -191,8 +191,27 @@ CREATE TABLE IF NOT EXISTS items (
   name TEXT NOT NULL UNIQUE,
   code TEXT DEFAULT '',
   retail_price REAL DEFAULT 0,
+  cost REAL DEFAULT 0,
   active INTEGER DEFAULT 1,
   created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS quotations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  customer_id INTEGER NOT NULL REFERENCES customers(id),
+  date TEXT NOT NULL,
+  notes TEXT DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'open',
+  invoice_id INTEGER,
+  number TEXT DEFAULT '',
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS quotation_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  quotation_id INTEGER NOT NULL REFERENCES quotations(id) ON DELETE CASCADE,
+  item_name TEXT NOT NULL,
+  color TEXT DEFAULT '',
+  pairs REAL DEFAULT 0,
+  price REAL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS ledger_entries (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -269,6 +288,7 @@ MIGRATIONS = [
     ("payments", "cheque", "ALTER TABLE payments ADD COLUMN cheque REAL DEFAULT 0"),
     ("invoices", "reason", "ALTER TABLE invoices ADD COLUMN reason TEXT DEFAULT ''"),
     ("invoices", "number", "ALTER TABLE invoices ADD COLUMN number TEXT DEFAULT ''"),
+    ("items", "cost", "ALTER TABLE items ADD COLUMN cost REAL DEFAULT 0"),
     ("cheques", "endorsed_to", "ALTER TABLE cheques ADD COLUMN endorsed_to INTEGER"),
     ("cheques", "endorsed_date", "ALTER TABLE cheques ADD COLUMN endorsed_date TEXT DEFAULT ''"),
     ("cheques", "endorsed_note", "ALTER TABLE cheques ADD COLUMN endorsed_note TEXT DEFAULT ''"),
@@ -868,6 +888,7 @@ class API:
         try:
             conn.execute("INSERT INTO users (username, pass_hash, role, created_at) VALUES (?,?,?,?)",
                          (uname, hash_password(pw), role, now_str()))
+            log_action(conn, user, "مستخدم جديد", "%s (%s)" % (uname, role))
             conn.commit()
         except sqlite3.IntegrityError:
             conn.close()
@@ -912,6 +933,7 @@ class API:
                 conn.execute("INSERT INTO settings (key, value) VALUES (?,?) "
                              "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                              (k, str(body.get(k) or "")))
+        log_action(conn, user, "تعديل إعدادات", ", ".join(sorted(body.keys())))
         conn.commit()
         conn.close()
         return 200, {"ok": True}
@@ -992,6 +1014,7 @@ class API:
              body.get("code", ""), body.get("address", ""),
              float(body.get("credit_limit") or 0), float(body.get("opening") or 0),
              body.get("opening_date", ""), cid))
+        log_action(conn, user, "تعديل بيانات طرف", body.get("name", ""))
         conn.commit()
         conn.close()
         return 200, {"ok": True}
@@ -1781,6 +1804,242 @@ class API:
         conn.close()
         return 200, out
 
+
+    # ---------- 1.7.0: today panel, model profit, quotations, restore ----------
+    def today(q, user):
+        conn = get_db()
+        t = datetime.now().strftime("%Y-%m-%d")
+        alert_days = int(float(get_setting(conn, "alert_days", "30") or 30))
+        cheque_days = int(float(get_setting(conn, "cheque_alert_days", "2") or 2))
+        def dplus(n):
+            return (datetime.now() + timedelta(days=n)).strftime("%Y-%m-%d")
+        tin = conn.execute("SELECT COALESCE(SUM(amount),0) s FROM treasury WHERE date=? AND kind='in'", (t,)).fetchone()["s"]
+        tout = conn.execute("SELECT COALESCE(SUM(amount),0) s FROM treasury WHERE date=? AND kind='out'", (t,)).fetchone()["s"]
+        qcheq = ("SELECT c.*, cu.name AS customer_name, cu.kind AS party_kind FROM cheques c"
+                 " JOIN customers cu ON cu.id=c.customer_id"
+                 " WHERE c.status IN ('pending','endorsed') AND c.due_date<=? ORDER BY c.due_date")
+        week = rows(conn.execute(qcheq, (dplus(7),)))
+        for c in week:
+            c["overdue"] = c["due_date"] < t
+            c["due_today"] = c["due_date"] == t
+            c["due_soon"] = (not c["overdue"]) and (not c["due_today"]) and c["due_date"] <= dplus(cheque_days)
+        overdue = [c for c in week if c["overdue"]]
+        out = {"date": t,
+               "treasury_in": round(tin, 2), "treasury_out": round(tout, 2),
+               "cheques_week": week,
+               "cheques_overdue_count": len(overdue),
+               "cheques_overdue_sum": round(sum(c["amount"] for c in overdue), 2),
+               "cheques_due_today": [c for c in week if c["due_today"]],
+               "cheques_due_soon": [c for c in week if c["due_soon"]],
+               "cheque_alert_days": cheque_days}
+        # overdue customers (same aging basis as collections)
+        overdue_cust = []
+        for p in conn.execute("SELECT * FROM customers WHERE kind='customer'"):
+            bal = party_balance(conn, p["id"])
+            if bal <= 0.005:
+                continue
+            oldest = conn.execute(
+                "SELECT MIN(date) d FROM invoices WHERE customer_id=? AND kind='sale'", (p["id"],)).fetchone()["d"]
+            if not oldest:
+                continue
+            try:
+                days = (datetime.now().date() - datetime.strptime(oldest, "%Y-%m-%d").date()).days
+            except ValueError:
+                days = 0
+            if days > alert_days:
+                overdue_cust.append({"id": p["id"], "name": p["name"], "balance": round(bal, 2), "days": days})
+        overdue_cust.sort(key=lambda x: -x["balance"])
+        out["overdue_customers"] = overdue_cust[:10]
+        out["overdue_customers_count"] = len(overdue_cust)
+        conn.close()
+        return 200, out
+
+    def model_profit(q, user):
+        dfrom = q.get("from", [""])[0]
+        dto = q.get("to", [""])[0]
+        cond = "i.kind IN ('sale','return')"
+        args = []
+        if dfrom:
+            cond += " AND i.date>=?"
+            args.append(dfrom)
+        if dto:
+            cond += " AND i.date<=?"
+            args.append(dto)
+        conn = get_db()
+        agg = {}
+        for r in conn.execute(
+                "SELECT ii.item_name, ii.pairs, ii.price, i.kind FROM invoice_items ii"
+                " JOIN invoices i ON i.id=ii.invoice_id WHERE " + cond, args):
+            a = agg.setdefault(r["item_name"], {"pairs": 0.0, "revenue": 0.0})
+            sign = 1 if r["kind"] == "sale" else -1
+            a["pairs"] += sign * (r["pairs"] or 0)
+            a["revenue"] += sign * (r["pairs"] or 0) * (r["price"] or 0)
+        costs = {r["name"]: (r["cost"] or 0) for r in conn.execute("SELECT name, cost FROM items")}
+        out = []
+        for name, a in agg.items():
+            cost = costs.get(name, 0.0)
+            profit = a["revenue"] - cost * a["pairs"]
+            out.append({"item_name": name, "pairs": round(a["pairs"], 2),
+                        "revenue": round(a["revenue"], 2), "unit_cost": round(cost, 2),
+                        "has_cost": name in costs and cost > 0,
+                        "profit": round(profit, 2),
+                        "margin": round(profit / a["revenue"] * 100, 1) if a["revenue"] > 0 else 0})
+        out.sort(key=lambda x: -x["profit"])
+        conn.close()
+        return 200, {"items": out,
+                     "total_profit": round(sum(x["profit"] for x in out), 2),
+                     "total_revenue": round(sum(x["revenue"] for x in out), 2)}
+
+    # ---------- quotations ----------
+    def list_quotations(q, user):
+        conn = get_db()
+        out = rows(conn.execute(
+            "SELECT q.*, c.name AS customer_name FROM quotations q"
+            " JOIN customers c ON c.id=q.customer_id ORDER BY q.date DESC, q.id DESC"))
+        for qt in out:
+            its = rows(conn.execute("SELECT * FROM quotation_items WHERE quotation_id=?", (qt["id"],)))
+            qt["items"] = its
+            qt["pairs"] = round(sum(i["pairs"] or 0 for i in its), 2)
+            qt["total"] = round(sum((i["pairs"] or 0) * (i["price"] or 0) for i in its), 2)
+        conn.close()
+        return 200, out
+
+    def create_quote(body, user):
+        cid = body.get("customer_id")
+        if not cid:
+            return 400, {"error": "اختر العميل أولاً"}
+        items = body.get("items") or []
+        if not items:
+            return 400, {"error": "أضف صنفاً واحداً على الأقل"}
+        conn = get_db()
+        last = conn.execute("SELECT number FROM quotations WHERE number != ''"
+                            " ORDER BY CAST(SUBSTR(number,3) AS INTEGER) DESC LIMIT 1").fetchone()
+        seq = 1
+        if last and last["number"]:
+            try:
+                seq = int(str(last["number"]).split("-")[1]) + 1
+            except (IndexError, ValueError):
+                pass
+        number = "Q-%04d" % seq
+        cur = conn.execute(
+            "INSERT INTO quotations (customer_id, date, notes, status, number, created_at)"
+            " VALUES (?,?,?,?,?,?)",
+            (cid, body.get("date") or datetime.now().strftime("%Y-%m-%d"),
+             body.get("notes", ""), "open", number, now_str()))
+        qid = cur.lastrowid
+        for it in items:
+            conn.execute(
+                "INSERT INTO quotation_items (quotation_id, item_name, color, pairs, price)"
+                " VALUES (?,?,?,?,?)",
+                (qid, it["item_name"].strip(), it.get("color", ""),
+                 float(it.get("pairs") or 0), float(it.get("price") or 0)))
+        log_action(conn, user, "عرض سعر جديد", "رقم %s" % number)
+        conn.commit()
+        conn.close()
+        return 200, {"id": qid, "number": number}
+
+    def get_quote(qid, user):
+        conn = get_db()
+        qt = conn.execute("SELECT q.*, c.name AS customer_name, c.phone AS customer_phone"
+                          " FROM quotations q JOIN customers c ON c.id=q.customer_id"
+                          " WHERE q.id=?", (qid,)).fetchone()
+        if not qt:
+            conn.close()
+            return 404, {"error": "عرض السعر مش موجود"}
+        qt = dict(qt)
+        qt["items"] = rows(conn.execute("SELECT * FROM quotation_items WHERE quotation_id=?", (qid,)))
+        qt["pairs"] = round(sum(i["pairs"] or 0 for i in qt["items"]), 2)
+        qt["total"] = round(sum((i["pairs"] or 0) * (i["price"] or 0) for i in qt["items"]), 2)
+        qt["company"] = {"company_name": get_setting(conn, "company_name", ""),
+                         "company_phone": get_setting(conn, "company_phone", ""),
+                         "company_address": get_setting(conn, "company_address", "")}
+        conn.close()
+        return 200, qt
+
+    def convert_quote(qid, user):
+        conn = get_db()
+        qt = conn.execute("SELECT * FROM quotations WHERE id=?", (qid,)).fetchone()
+        if not qt:
+            conn.close()
+            return 404, {"error": "عرض السعر مش موجود"}
+        if qt["status"] == "converted":
+            conn.close()
+            return 400, {"error": "عرض السعر ده اتحوّل لفاتورة قبل كده"}
+        its = rows(conn.execute("SELECT * FROM quotation_items WHERE quotation_id=?", (qid,)))
+        conn.close()
+        body = {"customer_id": qt["customer_id"], "kind": "sale",
+                "date": datetime.now().strftime("%Y-%m-%d"),
+                "notes": ("عرض سعر " + qt["number"]) if qt["number"] else "",
+                "items": [{"item_name": i["item_name"], "color": i["color"],
+                           "pairs": i["pairs"], "price": i["price"]} for i in its]}
+        status, res = API.create_invoice(body, user)
+        if status != 200:
+            return status, res
+        conn = get_db()
+        conn.execute("UPDATE quotations SET status='converted', invoice_id=? WHERE id=?",
+                     (res["id"], qid))
+        log_action(conn, user, "تحويل عرض سعر لفاتورة",
+                   "%s -> %s" % (qt["number"], res.get("number", res["id"])))
+        conn.commit()
+        conn.close()
+        return 200, {"ok": True, "invoice_id": res["id"], "invoice_number": res.get("number", "")}
+
+    def cancel_quote(qid, user):
+        conn = get_db()
+        conn.execute("UPDATE quotations SET status='canceled' WHERE id=? AND status='open'", (qid,))
+        log_action(conn, user, "إلغاء عرض سعر", "رقم %s" % qid)
+        conn.commit()
+        conn.close()
+        return 200, {"ok": True}
+
+    # ---------- backups & restore ----------
+    def list_backups(q, user):
+        seen = {}
+        for folder in {BACKUP_DIR, backup_dir_effective()}:
+            try:
+                for f in os.listdir(folder):
+                    if f.startswith("nixt-") and f.endswith(".db"):
+                        p = os.path.join(folder, f)
+                        try:
+                            st = os.stat(p)
+                        except OSError:
+                            continue
+                        seen[f] = {"file": f, "size": st.st_size,
+                                   "mtime": datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M"),
+                                   "folder": folder}
+            except OSError:
+                pass
+        out = sorted(seen.values(), key=lambda x: x["file"], reverse=True)
+        return 200, {"backups": out[:30], "dir": backup_dir_effective()}
+
+    def restore_backup(body, user):
+        fname = os.path.basename(body.get("file") or "")
+        if not fname.startswith("nixt-") or not fname.endswith(".db"):
+            return 400, {"error": "اسم ملف غير صحيح"}
+        src_path = None
+        for folder in {BACKUP_DIR, backup_dir_effective()}:
+            p = os.path.join(folder, fname)
+            if os.path.isfile(p):
+                src_path = p
+                break
+        if not src_path:
+            return 404, {"error": "النسخة مش موجودة"}
+        try:
+            check = sqlite3.connect(src_path)
+            check.execute("SELECT COUNT(*) FROM customers").fetchone()
+            check.close()
+        except sqlite3.Error:
+            return 400, {"error": "ملف النسخة تالف"}
+        safety = do_backup()
+        src_conn = sqlite3.connect(src_path)
+        dst_conn = get_db()
+        src_conn.backup(dst_conn)
+        src_conn.close()
+        log_action(dst_conn, user, "استعادة نسخة احتياطية", fname)
+        dst_conn.commit()
+        dst_conn.close()
+        return 200, {"ok": True, "restored": fname, "safety_backup": os.path.basename(safety)}
+
     # ---------- price lists ----------
     def top_items(q, user):
         dfrom = q.get("from", [""])[0]
@@ -1939,10 +2198,17 @@ class API:
         except (TypeError, ValueError):
             return 400, {"error": "سعر المستهلك غير صحيح"}
         conn = get_db()
+        try:
+            cost = float(body.get("cost") or 0)
+        except (TypeError, ValueError):
+            return 400, {"error": "التكلفة غير صحيحة"}
+        conn = get_db()
         conn.execute(
-            "INSERT INTO items (name, code, retail_price, active, created_at) VALUES (?,?,?,1,?) "
-            "ON CONFLICT(name) DO UPDATE SET code=excluded.code, retail_price=excluded.retail_price",
-            (name, body.get("code", "") or "", retail, now_str()))
+            "INSERT INTO items (name, code, retail_price, cost, active, created_at) VALUES (?,?,?,?,1,?) "
+            "ON CONFLICT(name) DO UPDATE SET code=excluded.code, retail_price=excluded.retail_price,"
+            " cost=excluded.cost",
+            (name, body.get("code", "") or "", retail, cost, now_str()))
+        log_action(conn, user, "حفظ صنف", "%s - مستهلك %s - تكلفة %s" % (name, retail, cost))
         conn.commit()
         iid = conn.execute("SELECT id FROM items WHERE name=?", (name,)).fetchone()["id"]
         conn.close()
@@ -1973,6 +2239,7 @@ class API:
         conn.execute("INSERT INTO customer_prices (customer_id, item_name, price, created_at) VALUES (?,?,?,?) "
                      "ON CONFLICT(customer_id, item_name) DO UPDATE SET price=excluded.price",
                      (cid, name, price, now_str()))
+        log_action(conn, user, "سعر خاص", "%s - %s = %s" % (cid, name, price))
         conn.commit()
         conn.close()
         return 200, {"ok": True}
@@ -2385,6 +2652,8 @@ ROUTES_POST = {
     "/api/prices": (lambda b, u: API.save_price(b, u), False),
     "/api/items": (lambda b, u: API.save_item(b, u), False),
     "/api/monthly-close": (lambda b, u: API.monthly_close(b, u), True),
+    "/api/quotations": (lambda b, u: API.create_quote(b, u), False),
+    "/api/restore": (lambda b, u: API.restore_backup(b, u), True),
     "/api/monthly-open": (lambda b, u: API.monthly_open(b, u), True),
     "/api/sync/pull": (lambda b, u: API.sync_pull(b, u), True),
 }
@@ -2407,6 +2676,10 @@ ROUTES_GET = {
     "/api/prices": (API.list_prices, False),
     "/api/item-names": (API.list_item_names, False),
     "/api/top-items": (API.top_items, False),
+    "/api/today": (API.today, False),
+    "/api/model-profit": (API.model_profit, True),
+    "/api/quotations": (API.list_quotations, False),
+    "/api/backups": (API.list_backups, True),
     "/api/collections": (API.collections, False),
     "/api/monthly-report": (API.monthly_report, True),
     "/api/items": (API.list_items, False),
@@ -2499,6 +2772,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(*API.get_invoice(int(path.rsplit("/", 1)[1]), user))
             if path.startswith("/api/payments/"):
                 return self._send(*API.get_payment(int(path.rsplit("/", 1)[1]), user))
+            if path.startswith("/api/quotations/"):
+                return self._send(*API.get_quote(int(path.rsplit("/", 1)[1]), user))
             self._send(404, {"error": "not found"})
         except Exception as e:
             self._send(500, {"error": str(e)})
@@ -2541,6 +2816,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(*API.endorse_cheque(int(path.split("/")[3]), body, user))
             if path.startswith("/api/customers/"):
                 return self._send(*API.update_customer(int(path.rsplit("/", 1)[1]), body, user))
+            if path.startswith("/api/quotations/") and path.endswith("/convert"):
+                return self._send(*API.convert_quote(int(path.strip("/").split("/")[2]), user))
+            if path.startswith("/api/quotations/") and path.endswith("/cancel"):
+                return self._send(*API.cancel_quote(int(path.strip("/").split("/")[2]), user))
             if path.startswith("/api/users/") and path.endswith("/reset"):
                 if user["role"] != "admin":
                     return self._send(403, {"error": "admin_required"})
