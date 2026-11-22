@@ -30,7 +30,7 @@ from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.4.0"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
@@ -253,6 +253,9 @@ MIGRATIONS = [
     ("cheques", "endorsed_date", "ALTER TABLE cheques ADD COLUMN endorsed_date TEXT DEFAULT ''"),
     ("cheques", "endorsed_note", "ALTER TABLE cheques ADD COLUMN endorsed_note TEXT DEFAULT ''"),
     ("cheques", "endorsement_payment_id", "ALTER TABLE cheques ADD COLUMN endorsement_payment_id INTEGER"),
+    ("invoices", "return_of", "ALTER TABLE invoices ADD COLUMN return_of INTEGER"),
+    ("payments", "vcash", "ALTER TABLE payments ADD COLUMN vcash REAL DEFAULT 0"),
+    ("treasury", "method", "ALTER TABLE treasury ADD COLUMN method TEXT DEFAULT 'cash'"),
 ]
 
 DEFAULT_SETTINGS = {
@@ -384,7 +387,7 @@ def party_balance(conn, pid):
         net = invoice_net(inv["id"], conn)
         bal += net if inv["kind"] == sale_kind else -net
     for pm in conn.execute("SELECT * FROM payments WHERE customer_id=?", (pid,)):
-        total = (pm["cash"] or 0) + (pm["card"] or 0) + (pm["transfer"] or 0) + (pm["cheque"] or 0)
+        total = (pm["cash"] or 0) + (pm["card"] or 0) + (pm["transfer"] or 0) + (pm["cheque"] or 0) + (pm["vcash"] or 0)
         bal -= total  # 'in' from customer or 'out' to supplier both reduce balance
     le = conn.execute("SELECT COALESCE(SUM(debit-credit),0) s FROM ledger_entries WHERE customer_id=?",
                       (pid,)).fetchone()["s"]
@@ -916,8 +919,11 @@ class API:
              float(body.get("shipping") or 0), float(body.get("other_charges") or 0),
              float(body.get("discount") or 0), body.get("notes", ""), now_str()))
         iid = cur.lastrowid
-        if kind in ("return", "purchase_return") and body.get("reason"):
-            conn.execute("UPDATE invoices SET reason=? WHERE id=?", (body.get("reason", ""), iid))
+        if kind in ("return", "purchase_return"):
+            if body.get("reason"):
+                conn.execute("UPDATE invoices SET reason=? WHERE id=?", (body.get("reason", ""), iid))
+            if body.get("return_of"):
+                conn.execute("UPDATE invoices SET return_of=? WHERE id=?", (int(body["return_of"]), iid))
         for it in body.get("items", []):
             if not (it.get("item_name") or "").strip():
                 continue
@@ -971,7 +977,7 @@ class API:
         sql += " ORDER BY p.date DESC, p.id DESC"
         out = rows(conn.execute(sql, args))
         for p in out:
-            p["total"] = round((p["cash"] or 0) + (p["card"] or 0) + (p["transfer"] or 0) + (p["cheque"] or 0), 2)
+            p["total"] = round((p["cash"] or 0) + (p["card"] or 0) + (p["transfer"] or 0) + (p["cheque"] or 0) + (p["vcash"] or 0), 2)
         conn.close()
         return 200, out
 
@@ -985,12 +991,13 @@ class API:
         cash = float(body.get("cash") or 0)
         card = float(body.get("card") or 0)
         transfer = float(body.get("transfer") or 0)
+        vcash = float(body.get("vcash") or 0)
         cheque = float(body.get("cheque") or 0)
         pdate = body.get("date") or datetime.now().strftime("%Y-%m-%d")
         cur = conn.execute(
-            "INSERT INTO payments (customer_id, date, cash, card, transfer, cheque, notes, direction, created_at)"
-            " VALUES (?,?,?,?,?,?,?,?,?)",
-            (cid, pdate, cash, card, transfer, cheque, body.get("notes", ""), direction, now_str()))
+            "INSERT INTO payments (customer_id, date, cash, card, transfer, cheque, vcash, notes, direction, created_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (cid, pdate, cash, card, transfer, cheque, vcash, body.get("notes", ""), direction, now_str()))
         pid = cur.lastrowid
         if cheque > 0:
             due = (body.get("cheque_due") or "").strip()
@@ -1007,13 +1014,15 @@ class API:
             conn.execute("INSERT INTO cheque_events (cheque_id, ts, event, detail) VALUES (?,?,?,?)",
                          (chk_id, now_str(), ev0,
                           "%s - %s - سند رقم %s - الاستحقاق %s" % (ev0, party["name"] if party else "", pid, due)))
-        instant = cash + card + transfer
-        if instant > 0:
-            cat = "تحصيل من عميل" if direction == "in" else "دفع لمورد"
-            conn.execute(
-                "INSERT INTO treasury (date, kind, category, amount, notes, source, source_id, created_at)"
-                " VALUES (?,?,?,?,?,?,?,?)",
-                (pdate, direction, cat, instant, body.get("notes", ""), "payment", pid, now_str()))
+        instant = cash + card + transfer + vcash
+        base_cat = "تحصيل من عميل" if direction == "in" else "دفع لمورد"
+        for m, amt, lbl in (("cash", cash, "كاش"), ("card", card, "شبكة"),
+                            ("transfer", transfer, "تحويل بنكي"), ("vcash", vcash, "فودافون كاش")):
+            if amt > 0:
+                conn.execute(
+                    "INSERT INTO treasury (date, kind, category, amount, notes, source, source_id, method, created_at)"
+                    " VALUES (?,?,?,?,?,?,?,?,?)",
+                    (pdate, direction, base_cat + " - " + lbl, amt, body.get("notes", ""), "payment", pid, m, now_str()))
         name = party["name"] if party else ""
         log_action(conn, user, "دفعة جديدة",
                    "%s - %s - إجمالي %s" % (name, pdate, round(instant + cheque, 2)))
@@ -1072,7 +1081,7 @@ class API:
                 "debit": debit, "credit": credit,
             })
         for p in conn.execute("SELECT * FROM payments WHERE customer_id=?", (cid,)):
-            total = (p["cash"] or 0) + (p["card"] or 0) + (p["transfer"] or 0) + (p["cheque"] or 0)
+            total = (p["cash"] or 0) + (p["card"] or 0) + (p["transfer"] or 0) + (p["cheque"] or 0) + (p["vcash"] or 0)
             parts = []
             if p["cash"]:
                 parts.append("كاش")
@@ -1080,6 +1089,8 @@ class API:
                 parts.append("شبكة")
             if p["transfer"]:
                 parts.append("تحويل")
+            if p["vcash"]:
+                parts.append("فودافون كاش")
             if p["cheque"]:
                 parts.append("شيك")
             label = "دفعة للمورد" if is_supplier else "دفعة"
@@ -1097,6 +1108,27 @@ class API:
                 "debit": round(e["debit"] or 0, 2), "credit": round(e["credit"] or 0, 2),
             })
         lines.sort(key=lambda l: (0 if l["type"] == "opening" else 1, l["date"] or "0000", l["sort"]))
+        dfrom = q.get("from", [""])[0]
+        dto = q.get("to", [""])[0]
+        if dfrom or dto:
+            within, before = [], []
+            for l in lines:
+                d = l["date"] or ""
+                if l["type"] == "opening" or (dfrom and d < dfrom):
+                    before.append(l)
+                elif dto and d > dto:
+                    continue
+                else:
+                    within.append(l)
+            carried = 0.0
+            for l in before:
+                carried += (l["debit"] - l["credit"]) if not is_supplier else (l["credit"] - l["debit"])
+            if abs(carried) > 0.004:
+                within.insert(0, {"date": dfrom or "", "sort": "", "type": "carried", "ref": 0,
+                                  "desc": "رصيد مرحّل من الفترة السابقة",
+                                  "debit": round(carried, 2) if carried > 0 else 0,
+                                  "credit": round(-carried, 2) if carried < 0 else 0})
+            lines = within
         bal = 0.0
         for l in lines:
             bal += (l["debit"] - l["credit"]) if not is_supplier else (l["credit"] - l["debit"])
@@ -1110,7 +1142,7 @@ class API:
                                       (inv["id"],)).fetchone()["s"]
             elif inv["kind"] == ret_kind:
                 returns += net
-        paid = conn.execute("SELECT COALESCE(SUM(cash+card+transfer+cheque),0) s FROM payments WHERE customer_id=?",
+        paid = conn.execute("SELECT COALESCE(SUM(cash+card+transfer+cheque+vcash),0) s FROM payments WHERE customer_id=?",
                             (cid,)).fetchone()["s"]
         led = conn.execute("SELECT COALESCE(SUM(debit-credit),0) s FROM ledger_entries WHERE customer_id=?",
                            (cid,)).fetchone()["s"]
@@ -1339,12 +1371,36 @@ class API:
         if month:
             ent = rows(conn.execute("SELECT * FROM treasury WHERE date LIKE ? ORDER BY date DESC, id DESC", (month + "%",)))
         else:
-            ent = rows(conn.execute("SELECT * FROM treasury ORDER BY date DESC, id DESC LIMIT 300"))
+            ent = rows(conn.execute("SELECT * FROM treasury ORDER BY date DESC, id DESC LIMIT 500"))
+        # party name for payment/cheque sourced entries
+        pay_party = {}
+        for r in conn.execute(
+                "SELECT p.id AS pid, c.name AS nm FROM payments p JOIN customers c ON c.id=p.customer_id"):
+            pay_party[r["pid"]] = r["nm"]
+        chq_party = {}
+        for r in conn.execute(
+                "SELECT ch.id AS cid, c.name AS nm FROM cheques ch JOIN customers c ON c.id=ch.customer_id"):
+            chq_party[r["cid"]] = r["nm"]
+        for e in ent:
+            e["method"] = e["method"] or "cash"
+            if e["source"] == "payment":
+                e["party_name"] = pay_party.get(e["source_id"], "")
+            elif e["source"] == "cheque":
+                e["party_name"] = chq_party.get(e["source_id"], "")
+            else:
+                e["party_name"] = ""
         tot_in = sum(e["amount"] for e in ent if e["kind"] == "in")
         tot_out = sum(e["amount"] for e in ent if e["kind"] == "out")
+        by_method = {}
+        for e in ent:
+            b = by_method.setdefault(e["method"], {"in": 0.0, "out": 0.0})
+            b[e["kind"]] = round(b[e["kind"]] + e["amount"], 2)
+        for b in by_method.values():
+            b["net"] = round(b["in"] - b["out"], 2)
         conn.close()
         return 200, {"entries": ent, "total_in": round(tot_in, 2),
-                     "total_out": round(tot_out, 2), "net": round(tot_in - tot_out, 2)}
+                     "total_out": round(tot_out, 2), "net": round(tot_in - tot_out, 2),
+                     "by_method": by_method}
 
     def create_treasury(body, user):
         kind = body.get("kind") if body.get("kind") in ("in", "out") else "out"
@@ -1352,12 +1408,13 @@ class API:
         if amount <= 0:
             return 400, {"error": "اكتب مبلغ صحيح"}
         conn = get_db()
+        method = body.get("method") if body.get("method") in ("cash", "vcash", "transfer", "card") else "cash"
         cur = conn.execute(
-            "INSERT INTO treasury (date, kind, category, amount, notes, source, created_at)"
-            " VALUES (?,?,?,?,?,?,?)",
+            "INSERT INTO treasury (date, kind, category, amount, notes, source, method, created_at)"
+            " VALUES (?,?,?,?,?,?,?,?)",
             (body.get("date") or datetime.now().strftime("%Y-%m-%d"), kind,
              (body.get("category") or "").strip(), amount, body.get("notes", ""),
-             "manual", now_str()))
+             "manual", method, now_str()))
         log_action(conn, user, "قيد خزينة",
                    "%s - %s - %s" % ("قبض" if kind == "in" else "صرف",
                                      body.get("category") or "", round(amount, 2)))
@@ -1425,10 +1482,10 @@ class API:
             direction = "out" if (cust and cust["kind"] == "supplier") else "in"
             cat = "صرف شيك لمورد" if direction == "out" else "تحصيل شيك"
             conn.execute(
-                "INSERT INTO treasury (date, kind, category, amount, notes, source, source_id, created_at)"
-                " VALUES (?,?,?,?,?,?,?,?)",
+                "INSERT INTO treasury (date, kind, category, amount, notes, source, source_id, method, created_at)"
+                " VALUES (?,?,?,?,?,?,?,?,?)",
                 (datetime.now().strftime("%Y-%m-%d"), direction, cat, c["amount"],
-                 "شيك " + (c["cheque_number"] or ""), "cheque", cid, now_str()))
+                 "شيك " + (c["cheque_number"] or ""), "cheque", cid, "cheque", now_str()))
         if st == "bounced" and old_status != "bounced":
             # customer debt goes back up
             if c["payment_id"]:
@@ -1512,7 +1569,7 @@ class API:
             for r in conn.execute("SELECT * FROM invoices WHERE customer_id=? AND kind='return'", (p["id"],)):
                 credit -= invoice_net(r["id"], conn)
             for pm in conn.execute("SELECT * FROM payments WHERE customer_id=?", (p["id"],)):
-                credit -= (pm["cash"] or 0) + (pm["card"] or 0) + (pm["transfer"] or 0) + (pm["cheque"] or 0)
+                credit -= (pm["cash"] or 0) + (pm["card"] or 0) + (pm["transfer"] or 0) + (pm["cheque"] or 0) + (pm["vcash"] or 0)
             buckets = {"b0": 0.0, "b30": 0.0, "b60": 0.0, "b90": 0.0}
             paid = -credit if credit < 0 else 0.0
             if credit > 0:
