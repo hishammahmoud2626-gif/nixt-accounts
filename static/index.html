@@ -161,7 +161,9 @@
   <button data-tab="statement" onclick="showTab('statement')">📄 كشف حساب</button>
   <button data-tab="treasury" onclick="showTab('treasury')">🏦 الخزينة</button>
   <button data-tab="cheques" onclick="showTab('cheques')">🖋️ الشيكات</button>
-  <button data-tab="profit" onclick="showTab('profit')">📈 الأرباح</button>
+  <button data-tab="profit" class="admin-only" onclick="showTab('profit')">📈 الأرباح</button>
+  <button data-tab="collections" onclick="showTab('collections')">📞 التحصيل</button>
+  <button data-tab="reports" class="admin-only" onclick="showTab('reports')">📊 التقارير</button>
 </div>
 <div class="subnav hidden" id="subnav-inventory">
   <button data-tab="inventory" data-inv="materials" class="active" onclick="showTab('inventory','materials')">الخامات</button>
@@ -275,7 +277,7 @@
       <h2>سجل حركات المبيعات</h2>
       <input class="search" id="sales-search" placeholder="بحث سريع..." oninput="filterTable('sales-table',this.value)">
       <table id="sales-table"><thead><tr>
-        <th>التاريخ</th><th>النوع</th><th>العميل</th><th>أزواج</th><th>الصافي</th><th>تفاصيل</th><th></th>
+        <th>رقم</th><th>التاريخ</th><th>النوع</th><th>العميل</th><th>أزواج</th><th>الصافي</th><th>تفاصيل</th><th></th>
       </tr></thead><tbody></tbody></table>
     </div>
   </section>
@@ -293,8 +295,52 @@
       <h2>سجل حركات المشتريات</h2>
       <input class="search" id="purchases-search" placeholder="بحث سريع..." oninput="filterTable('purchases-table',this.value)">
       <table id="purchases-table"><thead><tr>
-        <th>التاريخ</th><th>النوع</th><th>المورد</th><th>أزواج</th><th>الصافي</th><th>تفاصيل</th><th></th>
+        <th>رقم</th><th>التاريخ</th><th>النوع</th><th>المورد</th><th>أزواج</th><th>الصافي</th><th>تفاصيل</th><th></th>
       </tr></thead><tbody></tbody></table>
+    </div>
+  </section>
+
+  <!-- collections -->
+  <section id="tab-collections" class="hidden">
+    <div class="panel">
+      <h2>التحصيل <span class="sub">العملاء اللي عليهم فلوس، مرتبين من الأكبر - ابعت تذكير واتساب بضغطة</span></h2>
+      <table id="col-table"><thead><tr>
+        <th>العميل</th><th>تليفون</th><th>المتبقي عليه</th><th>أقدم فاتورة</th><th>من كام يوم</th><th>آخر دفعة</th><th></th>
+      </tr></thead><tbody></tbody></table>
+    </div>
+  </section>
+
+  <!-- reports -->
+  <section id="tab-reports" class="hidden">
+    <div class="panel">
+      <h2>الأكثر مبيعًا <span class="sub">صافي البيع (المرتجع بينقص)</span></h2>
+      <div class="row">
+        <div class="field"><label>من</label><input id="tp-from" type="date"></div>
+        <div class="field"><label>إلى</label><input id="tp-to" type="date"></div>
+        <button onclick="loadTopItems()">عرض</button>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+        <div>
+          <h3 style="margin:6px 0;font-size:14px">الموديلات</h3>
+          <table id="tp-items"><thead><tr><th>الصنف</th><th>أزواج</th><th>إجمالي</th></tr></thead><tbody></tbody></table>
+        </div>
+        <div>
+          <h3 style="margin:6px 0;font-size:14px">الألوان</h3>
+          <table id="tp-colors"><thead><tr><th>اللون</th><th>أزواج</th><th>إجمالي</th></tr></thead><tbody></tbody></table>
+        </div>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>تقفيل الشهر <span class="sub">تقرير الشهر + قفله عشان محدش يسجل فيه بعد التقفيل</span></h2>
+      <div class="row">
+        <div class="field"><label>الشهر</label><input id="mc-month" type="month"></div>
+        <button onclick="loadMonthlyReport()">عرض التقرير</button>
+        <button class="ghost" id="mc-close-btn" onclick="closeMonth()">🔒 قفل الشهر</button>
+        <button class="ghost hidden" id="mc-open-btn" onclick="reopenMonth()">🔓 فتح الشهر</button>
+        <button class="ghost" onclick="printMonthlyReport()">🖨 طباعة / حفظ PDF</button>
+      </div>
+      <div id="mc-status" style="margin:4px 0 8px;font-size:13px"></div>
+      <div id="mc-report"></div>
     </div>
   </section>
 
@@ -548,7 +594,7 @@
       <div class="row">
         <div class="field"><label>اسم المستخدم *</label><input id="u-name" style="width:170px"></div>
         <div class="field"><label>كلمة السر *</label><input id="u-pass" type="password" style="width:150px"></div>
-        <div class="field"><label>الصلاحية</label><select id="u-role"><option value="user">مستخدم</option><option value="admin">مدير</option></select></div>
+        <div class="field"><label>الصلاحية</label><select id="u-role"><option value="user">مستخدم</option><option value="accountant">محاسب (الحسابات فقط)</option><option value="admin">مدير</option></select></div>
       </div>
       <div class="row" style="margin-top:10px">
         <button onclick="addUser()">إضافة</button>
@@ -843,13 +889,21 @@ function showLogin(){
   for(const x of ['accounts','inventory','production','settings'])
     document.getElementById('subnav-'+x).classList.add('hidden');
 }
+function roleLabel(r){ return r==='admin'?'مدير':r==='accountant'?'محاسب':'مستخدم'; }
 function showApp(){
   document.getElementById('login-screen').style.display='none';
   document.getElementById('app-header').classList.remove('hidden');
   document.getElementById('app-main').classList.remove('hidden');
-  const admin = currentUser && currentUser.role==='admin';
+  const role = currentUser && currentUser.role;
+  const admin = role==='admin';
   document.querySelectorAll('.admin-only').forEach(b=>b.classList.toggle('hidden',!admin));
-  document.getElementById('who').textContent = currentUser.username + (admin?' (مدير)':'');
+  if(role==='accountant'){
+    for(const sec of ['inventory','production','settings']){
+      const b=document.querySelector('#nav button[data-sec="'+sec+'"]');
+      if(b) b.classList.add('hidden');
+    }
+  }
+  document.getElementById('who').textContent = currentUser.username + ' ('+roleLabel(role)+')';
 }
 async function bootAuth(){
   const me = await api('/api/me');
@@ -924,6 +978,9 @@ async function doLogout(){
 const TAB_SEC = {dash:'accounts',accounts:'accounts',invoice:'accounts',sales:'accounts',purchases:'accounts',payments:'accounts',statement:'accounts',treasury:'accounts',cheques:'accounts',profit:'accounts',inventory:'inventory',production:'production',settings:'settings',import:'settings',defs:'settings',sync:'settings'};
 const INV_TITLES = {materials:'المخزن - الخامات',soles:'المخزن - النعال',leather:'المخزن - الجلد (باكو)',ready:'المخزن - المخزون الجاهز',orders:'الإنتاج - أوامر الإنتاج',models:'الإنتاج - الموديلات'};
 function showSection(sec){
+  if(currentUser && currentUser.role==='accountant' && sec!=='accounts'){
+    toast('صلاحيتك على الحسابات بس', true); return;
+  }
   showTab(sec==='settings'?'settings':sec==='inventory'?'inventory':sec==='production'?'production':'dash');
 }
 function showTab(t, kind){
@@ -951,6 +1008,11 @@ function showTab(t, kind){
   if(t==='payments') loadPayments();
   if(t==='treasury') loadTreasury();
   if(t==='cheques') loadCheques();
+  if(t==='collections') loadCollections();
+  if(t==='reports'){
+    if(!document.getElementById('mc-month').value) document.getElementById('mc-month').value=today().slice(0,7);
+    loadTopItems();
+  }
   if(t==='profit'){
     if(!document.getElementById('pr-month').value) document.getElementById('pr-month').value=today().slice(0,7);
     loadProfit();
@@ -1254,6 +1316,16 @@ async function saveInvoice(andPrint){
   const cid=v('i-customer'); if(!cid){toast('اختر الطرف أولاً',true);return;}
   const {items}=readItems(); if(!items.length){toast('أضف صنفاً واحداً على الأقل',true);return;}
   const kind=document.getElementById('i-kind').value;
+  if(kind==='sale'){
+    const c=customers.find(x=>x.id==+cid);
+    if(c && (c.credit_limit||0)>0){
+      const net=parseFloat((document.getElementById('i-net').textContent||'0').replace(/,/g,''))||0;
+      const after=(c.balance||0)+net;
+      if(after>c.credit_limit+0.005){
+        if(!confirm('⚠ تحذير حد الائتمان:\n'+c.name+' هيتجاوز حد الائتمان ('+fmt(c.credit_limit)+' ج) بعد الفاتورة دي - هيبقى عليه '+fmt(after)+' ج.\nتحفظ الفاتورة برضه؟')) return;
+      }
+    }
+  }
   const body={customer_id:+cid, date:v('i-date')||today(), kind,
     shipping:v('i-shipping')||0, other_charges:v('i-other')||0, discount:v('i-discount')||0,
     notes:v('i-notes'), reason:v('i-reason'), return_of:v('i-return-of')||null, items};
@@ -1289,7 +1361,7 @@ async function loadInvoices(){
   await refreshCustomers();
   const invs=await api('/api/invoices');
   document.querySelector('#inv-table tbody').innerHTML=invs.slice(0,80).map(i=>`<tr>
-    <td class="num">${i.id}</td><td class="num">${i.date}</td><td>${esc(i.customer_name)}</td>
+    <td class="num">${esc(i.number||('#'+i.id))}</td><td class="num">${i.date}</td><td>${esc(i.customer_name)}</td>
     <td>${(i.kind==='return'||i.kind==='purchase_return')?'<span class="bad">'+KIND_LABEL[i.kind]+'</span>':KIND_LABEL[i.kind]||i.kind}</td>
     <td class="num">${fmt(i.pairs)}</td><td class="num">${fmt(i.net)}</td>
     <td style="white-space:nowrap"><button class="small" onclick="printInvoice(${i.id})">طباعة</button>
@@ -1316,7 +1388,7 @@ async function printInvoice(id){
   const rows=i.items.map((x,n)=>`<tr><td class="num">${n+1}</td><td>${esc(x.item_name)}</td><td>${esc(x.color)}</td>
     <td class="num">${fmt(x.pairs)}</td><td class="num">${fmt(x.price)}</td><td class="num">${fmt(x.pairs*x.price)}</td></tr>`).join('');
   showPrint(`<div class="doc">
-    ${companyHeader(i.company||{}, (KIND_LABEL[i.kind]||'فاتورة')+' رقم '+i.id)}
+    ${companyHeader(i.company||{}, (KIND_LABEL[i.kind]||'فاتورة')+' رقم '+(i.number||('#'+i.id)))}
     <div class="sub">التاريخ: <span class="num">${i.date}</span></div>
     <div>${partyLabel}: <b>${esc(i.customer?i.customer.name:'')}</b>
       ${i.customer&&i.customer.phone?' — تليفون: <span class="num">'+esc(i.customer.phone)+'</span>':''}</div>
@@ -1348,7 +1420,7 @@ async function loadPayments(){
     <td>${p.party_kind==='supplier'?'دفع لمورد':'قبض'}</td>
     <td class="num">${fmt(p.cash)}</td><td class="num">${fmt(p.card)}</td><td class="num">${fmt(p.transfer)}</td><td class="num">${fmt(p.vcash)}</td><td class="num">${fmt(p.cheque)}</td>
     <td class="num"><b>${fmt(p.total)}</b></td><td>${esc(p.notes)}</td>
-    <td><button class="small danger" ${currentUser.role!=='admin'?'style="display:none"':''} onclick="delPayment(${p.id})">حذف</button></td></tr>`).join('');
+    <td style="white-space:nowrap"><button class="small ghost" onclick="printVoucher(${p.id})">سند</button><button class="small danger" ${currentUser.role!=='admin'?'style="display:none"':''} onclick="delPayment(${p.id})">حذف</button></td></tr>`).join('');
   filterTable('pay-table', document.getElementById('pay-search').value);
 }
 async function savePayment(){
@@ -1527,7 +1599,7 @@ async function saveSettings(){
 async function loadUsers(){
   const us=await api('/api/users');
   document.querySelector('#users-table tbody').innerHTML=us.map(u=>`<tr>
-    <td>${esc(u.username)}</td><td>${u.role==='admin'?'مدير':'مستخدم'}</td>
+    <td>${esc(u.username)}</td><td>${roleLabel(u.role)}</td>
     <td style="white-space:nowrap">
       <button class="small ghost" onclick="resetUser(${u.id},'${esc(u.username)}')">تصفير كلمة السر</button>
       <button class="small danger" onclick="delUser(${u.id})">حذف</button></td></tr>`).join('');
@@ -1683,6 +1755,7 @@ async function loadMovements(kind){
     if(isRet){ det=esc(i.reason||''); if(i.return_of) det+=(det?' ':'')+'(مرتبطة بفاتورة #'+i.return_of+')'; }
     else if(i.notes) det=esc(i.notes);
     return `<tr>
+    <td class="num">${esc(i.number||('#'+i.id))}</td>
     <td class="num">${i.date}</td>
     <td>${isRet?'<span class="bad">'+KIND_LABEL[i.kind]+'</span>':KIND_LABEL[i.kind]}</td>
     <td>${esc(i.customer_name)}</td>
@@ -1890,6 +1963,126 @@ document.addEventListener('input',e=>{
   if(e.target && e.target.id==='pm-cheque')
     document.getElementById('pm-cheque-meta').style.display = (+e.target.value>0)?'flex':'none';
 });
+
+/* ---------- payment voucher ---------- */
+async function printVoucher(id){
+  try{
+    const p=await api('/api/payments/'+id);
+    const s=await api('/api/settings');
+    const isSup = p.party_kind==='supplier';
+    const methods=[['كاش',p.cash],['كارت',p.card],['تحويل بنكي',p.transfer],['فودافون كاش',p.vcash],['شيك',p.cheque]]
+      .filter(m=>+m[1]>0).map(m=>'<tr><td>'+m[0]+'</td><td class="num">'+fmt(m[1])+'</td></tr>').join('');
+    let chequeLine='';
+    if(+p.cheque>0 && (p.cheque_bank||p.cheque_number||p.cheque_due))
+      chequeLine='<p style="font-size:13px">الشيك: '+(p.cheque_bank||'')+' رقم '+(p.cheque_number||'-')+' - استحقاق '+(p.cheque_due||'-')+'</p>';
+    showPrint(`<div class="doc">
+      ${companyHeader(s, isSup?'سند صرف':'سند قبض')}
+      <div class="sub">رقم السند: <span class="num">${p.id}</span> - التاريخ: <span class="num">${p.date}</span></div>
+      <div class="fields"><div><b>${isSup?'صرفنا إلى':'استلمنا من'}:</b> ${esc(p.customer_name)}</div>
+      <div><b>المبلغ:</b> <span class="num">${fmt(p.total)}</span> جنيه</div></div>
+      ${p.notes?'<p>البيان: '+esc(p.notes)+'</p>':''}
+      <table style="width:55%"><thead><tr><th>طريقة الدفع</th><th>المبلغ</th></tr></thead><tbody>${methods}</tbody></table>
+      ${chequeLine}
+      <div class="sig"><span>${isSup?'توقيع المستلم':'توقيع أمين الخزنة'}: ................</span><span>الاعتماد: ................</span></div>
+    </div>`);
+  }catch(e){toast(e.message,true);}
+}
+
+/* ---------- collections & reports ---------- */
+async function loadCollections(){
+  try{
+    const list=await api('/api/collections');
+    document.querySelector('#col-table tbody').innerHTML=list.map(c=>`<tr>
+      <td>${esc(c.name)}</td><td class="num">${esc(c.phone||'-')}</td>
+      <td class="num bad"><b>${fmt(c.balance)}</b></td>
+      <td class="num">${esc(c.oldest_date||'-')}</td><td class="num">${c.days||0}</td>
+      <td class="num">${esc(c.last_payment||'-')}</td>
+      <td style="white-space:nowrap"><button class="small" onclick="openStatement(${c.id})">كشف</button>
+      <button class="small ghost" onclick="shareCollection(${c.id},this.dataset.n)" data-n="${esc(c.name)}">📲 تذكير واتساب</button></td></tr>`).join('')
+      ||'<tr><td colspan="7" class="muted">مفيش مديونيات على العملاء 🎉</td></tr>';
+    window._collections=list;
+  }catch(e){toast(e.message,true);}
+}
+function shareCollection(id){
+  const c=(window._collections||[]).find(x=>x.id===id); if(!c) return;
+  const phone=(c.phone||'').replace(/[^0-9]/g,'');
+  const txt='تحياتنا من نيكست للجلديات 🌹\nتذكير ودّي بالمديونية: المتبقي على حسابكم '+fmt(c.balance)+' جنيه.'
+    +(c.days>0?' أقدم مستحق من '+c.days+' يوم.':'')
+    +'\nلو سمحت رتّب التحصيل في أقرب وقت، وشكرًا لتعاملكم معانا.';
+  window.open('https://wa.me/'+phone+'?text='+encodeURIComponent(txt),'_blank');
+}
+async function loadTopItems(){
+  try{
+    const q=[]; if(v('tp-from')) q.push('from='+v('tp-from')); if(v('tp-to')) q.push('to='+v('tp-to'));
+    const r=await api('/api/top-items'+(q.length?'?'+q.join('&'):''));
+    document.querySelector('#tp-items tbody').innerHTML=r.items.map((x,i)=>`<tr>
+      <td>${i<3?['🥇','🥈','🥉'][i]:''} ${esc(x.item_name)}</td><td class="num">${fmt(x.pairs)}</td><td class="num">${fmt(x.total)}</td></tr>`).join('')
+      ||'<tr><td colspan="3" class="muted">مفيش مبيعات في الفترة دي</td></tr>';
+    document.querySelector('#tp-colors tbody').innerHTML=r.colors.map((x,i)=>`<tr>
+      <td><span class="dot" style="display:inline-block;width:10px;height:10px;border-radius:50%;border:1px solid rgba(0,0,0,.15);background:${COLOR_DOTS[x.color]||'#a8a29e'}"></span> ${esc(x.color)}</td><td class="num">${fmt(x.pairs)}</td><td class="num">${fmt(x.total)}</td></tr>`).join('')
+      ||'<tr><td colspan="3" class="muted">مفيش مبيعات في الفترة دي</td></tr>';
+  }catch(e){toast(e.message,true);}
+}
+let lastMonthly=null;
+async function loadMonthlyReport(){
+  const m=v('mc-month'); if(!m){toast('اختر الشهر الأول',true);return;}
+  try{
+    const r=await api('/api/monthly-report?month='+m);
+    lastMonthly=r;
+    document.getElementById('mc-close-btn').classList.toggle('hidden',!!r.closed);
+    document.getElementById('mc-open-btn').classList.toggle('hidden',!r.closed);
+    document.getElementById('mc-status').innerHTML = r.closed
+      ? '<span class="badge" style="background:#fee2e2;border-color:#fca5a5">🔒 الشهر ده متقفل - التسجيل فيه متوقف</span>'
+      : '<span class="badge" style="background:#dcfce7;border-color:#86efac">الشهر مفتوح</span>';
+    const exRows=Object.entries(r.expenses||{}).map(([k,vv])=>`<tr><td>${esc(k)}</td><td class="num">${fmt(vv)}</td></tr>`).join('');
+    document.getElementById('mc-report').innerHTML=`
+      <div class="cards">
+        <div class="card"><div class="t">المبيعات (صافي المرتجع)</div><div class="v num">${fmt(r.net_sales)}</div></div>
+        <div class="card"><div class="t">المشتريات (صافي المرتجع)</div><div class="v num">${fmt(r.net_purchases)}</div></div>
+        <div class="card"><div class="t">المحصّل من العملاء</div><div class="v num ok">${fmt(r.collected)}</div></div>
+        <div class="card"><div class="t">المدفوع للموردين</div><div class="v num">${fmt(r.paid_suppliers)}</div></div>
+        <div class="card"><div class="t">المصروفات</div><div class="v num bad">${fmt(r.expenses_total)}</div></div>
+        <div class="card" style="background:var(--accent-soft)"><div class="t">الربح التقريبي</div><div class="v num">${fmt(r.gross)}</div></div>
+      </div>
+      <p class="muted">عدد الفواتير في الشهر: <span class="num">${r.invoice_count}</span></p>
+      ${exRows?'<h3 style="font-size:14px;margin:8px 0">المصروفات حسب البند</h3><table style="width:50%"><thead><tr><th>البند</th><th>المبلغ</th></tr></thead><tbody>'+exRows+'</tbody></table>':''}`;
+  }catch(e){toast(e.message,true);}
+}
+async function closeMonth(){
+  const m=v('mc-month'); if(!m){toast('اختر الشهر الأول',true);return;}
+  if(!confirm('قفل شهر '+m+'؟ محدش هيقدر يسجل فواتير أو دفعات بتاريخ جوه الشهر ده غير لما تفتحه تاني.')) return;
+  try{ await api('/api/monthly-close',{method:'POST',body:JSON.stringify({month:m})}); toast('اتقفل الشهر'); loadMonthlyReport(); }
+  catch(e){toast(e.message,true);}
+}
+async function reopenMonth(){
+  const m=v('mc-month'); if(!m) return;
+  try{ await api('/api/monthly-open',{method:'POST',body:JSON.stringify({month:m})}); toast('اتفتح الشهر'); loadMonthlyReport(); }
+  catch(e){toast(e.message,true);}
+}
+async function printMonthlyReport(){
+  if(!lastMonthly){toast('اعرض التقرير الأول',true);return;}
+  const r=lastMonthly;
+  const s=await api('/api/settings');
+  const exRows=Object.entries(r.expenses||{}).map(([k,vv])=>`<tr><td>${esc(k)}</td><td class="num">${fmt(vv)}</td></tr>`).join('');
+  showPrint(`<div class="doc">
+    ${companyHeader(s,'تقرير تقفيل شهر '+r.month)}
+    <div class="sub">${r.closed?'الشهر متقفل 🔒':'الشهر مفتوح'} - عدد الفواتير: <span class="num">${r.invoice_count}</span></div>
+    <table><thead><tr><th>البند</th><th>المبلغ (جنيه)</th></tr></thead><tbody>
+      <tr><td>المبيعات</td><td class="num">${fmt(r.sales)}</td></tr>
+      <tr><td>مرتجعات البيع</td><td class="num">-${fmt(r.returns)}</td></tr>
+      <tr><td><b>صافي المبيعات</b></td><td class="num"><b>${fmt(r.net_sales)}</b></td></tr>
+      <tr><td>المشتريات</td><td class="num">${fmt(r.purchases)}</td></tr>
+      <tr><td>مرتجعات الشراء</td><td class="num">-${fmt(r.purchase_returns)}</td></tr>
+      <tr><td><b>صافي المشتريات</b></td><td class="num"><b>${fmt(r.net_purchases)}</b></td></tr>
+      <tr><td>المحصّل من العملاء</td><td class="num">${fmt(r.collected)}</td></tr>
+      <tr><td>المدفوع للموردين</td><td class="num">${fmt(r.paid_suppliers)}</td></tr>
+      <tr><td>إجمالي المصروفات</td><td class="num">${fmt(r.expenses_total)}</td></tr>
+      <tr><td><b>الربح التقريبي</b></td><td class="num"><b>${fmt(r.gross)}</b></td></tr>
+    </tbody></table>
+    ${exRows?'<h3 style="font-size:14px">المصروفات حسب البند</h3><table style="width:60%"><thead><tr><th>البند</th><th>المبلغ</th></tr></thead><tbody>'+exRows+'</tbody></table>':''}
+    <div class="sig"><span>توقيع المحاسب: ................</span><span>توقيع المدير: ................</span></div>
+  </div>`);
+}
 
 /* ---------- price lists & profit & whatsapp ---------- */
 let currentPrices=[];
