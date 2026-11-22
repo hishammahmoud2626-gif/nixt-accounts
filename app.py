@@ -31,7 +31,7 @@ from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-APP_VERSION = "1.7.1"
+APP_VERSION = "1.8.0"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -422,6 +422,7 @@ def init_db():
     if MIGRATED_FROM:
         conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?,?)",
                      ("migrated_from", MIGRATED_FROM))
+    sync_schema_upgrade(conn)
     # backfill invoice numbers (added in 1.6.0)
     counts = {}
     for r in conn.execute("SELECT kind, COUNT(*) c FROM invoices WHERE number != '' GROUP BY kind"):
@@ -624,6 +625,347 @@ def login_throttle_clear(uname):
 
 
 
+# ---------------- sync v2: drive lock + record-level merge ----------------
+SYNC_LOCK_STALE_SEC = 900
+SYNC_STATE = {"locked_by": None, "own_lock": False}
+
+SYNC_MERGE_TABLES = ["customers", "items", "employees", "imports", "activity_log",
+                     "invoices", "invoice_items", "payments", "ledger_entries", "treasury",
+                     "cheques", "cheque_events", "customer_prices",
+                     "quotations", "quotation_items", "users"]
+
+SYNC_FKS = {
+    "invoices": {"customer_id": "customers"},
+    "invoice_items": {"invoice_id": "invoices"},
+    "payments": {"customer_id": "customers"},
+    "ledger_entries": {"customer_id": "customers"},
+    "cheques": {"customer_id": "customers", "payment_id": "payments", "endorsed_to": "customers"},
+    "cheque_events": {"cheque_id": "cheques"},
+    "customer_prices": {"customer_id": "customers"},
+    "quotations": {"customer_id": "customers", "invoice_id": "invoices"},
+    "quotation_items": {"quotation_id": "quotations"},
+}
+
+SYNC_TS = "strftime('%Y-%m-%d %H:%M:%f','now','localtime')"
+SYNC_DEV = "(SELECT value FROM settings WHERE key='device_name')"
+
+
+def sync_schema_upgrade(conn):
+    """Add uuid/updated_at/device columns, the tombstones table and change
+    triggers to every syncable table. Idempotent."""
+    conn.execute("""CREATE TABLE IF NOT EXISTS sync_deletions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        tbl TEXT NOT NULL, uuid TEXT NOT NULL,
+        deleted_at TEXT NOT NULL, device TEXT DEFAULT '',
+        UNIQUE(tbl, uuid))""")
+    for t in SYNC_MERGE_TABLES:
+        cols = [r["name"] for r in conn.execute("PRAGMA table_info(%s)" % t)]
+        for col in ("uuid", "updated_at", "device"):
+            if col not in cols:
+                conn.execute("ALTER TABLE %s ADD COLUMN %s TEXT DEFAULT ''" % (t, col))
+                cols.append(col)
+        conn.execute("UPDATE %s SET uuid=lower(hex(randomblob(16))) WHERE uuid IS NULL OR uuid=''" % t)
+        base_ts = "created_at" if "created_at" in cols else ("ts" if "ts" in cols else None)
+        if base_ts:
+            conn.execute("UPDATE %s SET updated_at=%s WHERE updated_at IS NULL OR updated_at=''" % (t, base_ts))
+        conn.execute("UPDATE %s SET updated_at=? WHERE updated_at IS NULL OR updated_at=''" % t, (now_str(),))
+        conn.executescript(
+            "CREATE TRIGGER IF NOT EXISTS sync_ai_%s AFTER INSERT ON %s BEGIN\n"
+            "  UPDATE %s SET uuid=lower(hex(randomblob(16))) WHERE id=NEW.id AND (uuid IS NULL OR uuid='');\n"
+            "  UPDATE %s SET updated_at=%s, device=%s WHERE id=NEW.id;\n"
+            "END;\n"
+            "CREATE TRIGGER IF NOT EXISTS sync_au_%s AFTER UPDATE ON %s BEGIN\n"
+            "  UPDATE %s SET updated_at=%s, device=%s WHERE id=NEW.id;\n"
+            "END;\n"
+            "CREATE TRIGGER IF NOT EXISTS sync_ad_%s AFTER DELETE ON %s BEGIN\n"
+            "  INSERT INTO sync_deletions (tbl, uuid, deleted_at, device)\n"
+            "  SELECT '%s', OLD.uuid, %s, %s\n"
+            "  WHERE OLD.uuid IS NOT NULL AND OLD.uuid != '';\n"
+            "END;\n"
+            % (t, t, t, t, SYNC_TS, SYNC_DEV,
+               t, t, t, SYNC_TS, SYNC_DEV,
+               t, t, t, SYNC_TS, SYNC_DEV))
+    conn.commit()
+
+
+def sync_lock_path(sdir):
+    return os.path.join(sdir, "nixt-sync-lock.json")
+
+
+def sync_read_lock(sdir):
+    try:
+        with open(sync_lock_path(sdir), encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def sync_write_lock(sdir):
+    lock = {"device": device_name(), "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "epoch": time.time(), "app_version": APP_VERSION}
+    try:
+        with open(sync_lock_path(sdir), "w", encoding="utf-8") as f:
+            json.dump(lock, f, ensure_ascii=False)
+        return True
+    except OSError:
+        return False
+
+
+def sync_release_lock():
+    sdir = sync_dir()
+    SYNC_STATE["own_lock"] = False
+    if not sdir:
+        return
+    lock = sync_read_lock(sdir)
+    if lock and lock.get("device") == device_name():
+        try:
+            os.remove(sync_lock_path(sdir))
+        except OSError:
+            pass
+
+
+def sync_lock_heartbeat():
+    while SYNC_STATE.get("own_lock"):
+        time.sleep(120)
+        if not SYNC_STATE.get("own_lock"):
+            break
+        sdir = sync_dir()
+        if not sdir:
+            continue
+        lock = sync_read_lock(sdir)
+        # keep the lock while it is still ours (or gone); never steal another device's fresh lock
+        if not lock or lock.get("device") == device_name():
+            sync_write_lock(sdir)
+
+
+def sync_acquire_lock(force=False):
+    """Take the drive lock. Returns None on success, or the other device's
+    lock dict when it is held fresh by someone else."""
+    sdir = sync_dir()
+    if not sdir:
+        return None
+    try:
+        os.makedirs(sdir, exist_ok=True)
+    except OSError:
+        return None
+    lock = sync_read_lock(sdir)
+    if lock and lock.get("device") != device_name() and not force:
+        if time.time() - float(lock.get("epoch") or 0) < SYNC_LOCK_STALE_SEC:
+            return lock
+    if sync_write_lock(sdir):
+        SYNC_STATE["own_lock"] = True
+        SYNC_STATE["locked_by"] = None
+    return None
+
+
+def sync_on_startup():
+    """Merge in a newer remote snapshot, then take the drive lock. Runs once at boot."""
+    sdir = sync_dir()
+    if not sdir:
+        return
+    if not os.path.isdir(sdir):
+        try:
+            os.makedirs(sdir, exist_ok=True)
+        except OSError:
+            return
+    try:
+        remote = sync_remote_meta(sdir)
+        conn = get_db()
+        last = get_setting(conn, "sync_last", "")
+        conn.close()
+        if remote and remote.get("device") != device_name() and remote.get("ts", "") > last:
+            srcp = os.path.join(sdir, remote.get("file", ""))
+            if os.path.isfile(srcp):
+                stats = merge_remote_db(srcp, remote.get("device", ""))
+                conn = get_db()
+                conn.execute("INSERT INTO settings (key, value) VALUES ('sync_last', ?) "
+                             "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (remote["ts"],))
+                log_action(conn, {"username": "system"}, "مزامنة تلقائية عند الفتح",
+                           "دمج نسخة %s: %d جديد، %d تحديث، %d حذف"
+                           % (remote.get("device", ""), stats["inserted"], stats["updated"], stats["deleted"]))
+                conn.commit()
+                conn.close()
+    except Exception:
+        pass
+    other = sync_acquire_lock(force=False)
+    if other:
+        SYNC_STATE["locked_by"] = other
+        SYNC_STATE["own_lock"] = False
+    else:
+        threading.Thread(target=sync_lock_heartbeat, daemon=True).start()
+
+
+def sync_on_shutdown():
+    """Auto-upload a snapshot on exit, then release the lock."""
+    if not SYNC_STATE.get("own_lock"):
+        return
+    try:
+        do_sync_push()
+    except Exception:
+        pass
+    sync_release_lock()
+
+
+def _tbl_cols(conn, t, schema="main"):
+    return [r["name"] for r in conn.execute("PRAGMA %s.table_info(%s)" % (schema, t))]
+
+
+def merge_remote_db(remote_path, remote_device=""):
+    """Record-level merge of a remote snapshot DB into the local DB.
+    Identity is the record uuid; the newer updated_at wins; deletions win via
+    tombstones. A safety backup is always taken first."""
+    do_backup()
+    stats = {"inserted": 0, "updated": 0, "deleted": 0, "renumbered": 0}
+    pending_return = []
+    conn = get_db()
+    conn.isolation_level = None
+    try:
+        conn.execute("ATTACH DATABASE ? AS rem", (remote_path,))
+        # merge writes carry their own uuid/updated_at; suppress stamping and
+        # tombstone recording by removing the sync triggers for the duration
+        # (recreated right after, and on every app start via init_db)
+        for tr in [r[0] for r in conn.execute(
+                "SELECT name FROM main.sqlite_master WHERE type='trigger' AND name LIKE 'sync_%'")]:
+            conn.execute("DROP TRIGGER %s" % tr)
+        conn.execute("BEGIN IMMEDIATE")
+        # union of tombstones from both sides, newest wins
+        tombs = {}
+        for schema in ("main", "rem"):
+            try:
+                trows = conn.execute("SELECT tbl, uuid, deleted_at, device FROM %s.sync_deletions" % schema).fetchall()
+            except sqlite3.Error:
+                trows = []
+            for r in trows:
+                k = (r["tbl"], r["uuid"])
+                if k not in tombs or r["deleted_at"] > tombs[k][0]:
+                    tombs[k] = (r["deleted_at"], r["device"])
+        id_maps = {}
+        for t in SYNC_MERGE_TABLES:
+            id_maps[t] = merge_one_table(conn, t, tombs, id_maps, stats, remote_device, pending_return)
+        # deferred self-FK fix: invoices.return_of
+        inv_map = id_maps.get("invoices", {})
+        for lid, orig in pending_return:
+            conn.execute("UPDATE invoices SET return_of=? WHERE id=?", (inv_map.get(orig), lid))
+        # store merged tombstones locally
+        for (tbl, uuid), (deleted_at, device) in tombs.items():
+            conn.execute("INSERT INTO sync_deletions (tbl, uuid, deleted_at, device) VALUES (?,?,?,?) "
+                         "ON CONFLICT(tbl, uuid) DO UPDATE SET deleted_at=excluded.deleted_at, device=excluded.device "
+                         "WHERE excluded.deleted_at > sync_deletions.deleted_at",
+                         (tbl, uuid, deleted_at, device))
+        # apply tombstones: a row older than its tombstone is deleted
+        for (tbl, uuid), (deleted_at, device) in tombs.items():
+            if tbl not in SYNC_MERGE_TABLES:
+                continue
+            row = conn.execute("SELECT id, updated_at FROM %s WHERE uuid=?" % tbl, (uuid,)).fetchone()
+            if row and (row["updated_at"] or "") < deleted_at:
+                conn.execute("DELETE FROM %s WHERE id=?" % tbl, (row["id"],))
+                stats["deleted"] += 1
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    finally:
+        try:
+            sync_schema_upgrade(conn)  # recreate triggers + commit
+        except sqlite3.Error:
+            pass
+        try:
+            conn.execute("DETACH DATABASE rem")
+        except sqlite3.Error:
+            pass
+        conn.isolation_level = ""
+        conn.close()
+    return stats
+
+
+def _remap_treasury_source(d, id_maps):
+    src = d.get("source") or ""
+    ref = {"payment": "payments", "invoice": "invoices", "cheque": "cheques"}.get(src)
+    if ref:
+        d["source_id"] = id_maps.get(ref, {}).get(d.get("source_id"))
+    else:
+        d["source_id"] = None
+
+
+def merge_one_table(conn, t, tombs, id_maps, stats, remote_device, pending_return):
+    try:
+        rem_cols = _tbl_cols(conn, t, "rem")
+    except sqlite3.Error:
+        return {}
+    if not rem_cols:
+        return {}
+    local_cols = _tbl_cols(conn, t)
+    merge_cols = [c for c in rem_cols if c in local_cols and c != "id"]
+    by_uuid = {r["uuid"]: (r["id"], r["updated_at"] or "")
+               for r in conn.execute("SELECT id, uuid, updated_at FROM %s" % t) if r["uuid"]}
+    by_uname = {}
+    if t == "users":
+        by_uname = {r["username"]: (r["id"], r["updated_at"] or "")
+                    for r in conn.execute("SELECT id, username, updated_at FROM users")}
+    fks = SYNC_FKS.get(t, {})
+    remap = {}
+    for r in conn.execute("SELECT * FROM rem.%s" % t):
+        d = dict(r)
+        ruuid = d.get("uuid") or ""
+        if not ruuid:
+            ruuid = "leg-%s-%s-%s" % (t, remote_device or "x", d["id"])
+        rut = d.get("updated_at") or d.get("created_at") or d.get("ts") or ""
+        tb = tombs.get((t, ruuid))
+        if tb and rut < tb[0]:
+            continue
+        orig_return = None
+        for col, ref in fks.items():
+            if col in d and d[col] is not None:
+                d[col] = id_maps.get(ref, {}).get(d[col])
+        if t == "invoices" and "return_of" in d:
+            orig_return = d["return_of"]
+            d["return_of"] = id_maps.get("invoices", {}).get(orig_return)
+        if t == "treasury":
+            _remap_treasury_source(d, id_maps)
+        if t == "users":
+            hit = by_uname.get(d.get("username"))
+        else:
+            hit = by_uuid.get(ruuid)
+        if hit:
+            lid, lut = hit
+            if rut > lut:
+                sets = [c for c in merge_cols if c != "uuid"]
+                vals = [d.get(c) for c in sets] + [lid]
+                conn.execute("UPDATE %s SET %s WHERE id=?"
+                             % (t, ",".join("%s=?" % c for c in sets)), vals)
+                stats["updated"] += 1
+            remap[d["id"]] = lid
+            if t == "invoices" and orig_return is not None:
+                pending_return.append((lid, orig_return))
+        else:
+            if t in ("invoices", "quotations") and d.get("number"):
+                clash = conn.execute("SELECT id FROM %s WHERE number=? AND uuid<>?" % t,
+                                     (d["number"], ruuid)).fetchone()
+                if clash:
+                    prefix = INV_NUMBER_PREFIX.get(d.get("kind") or "sale", "X") if t == "invoices" else "Q"
+                    seq = 1
+                    for nrow in conn.execute("SELECT number FROM %s WHERE number LIKE ?" % t, (prefix + "-%",)):
+                        try:
+                            seq = max(seq, int((nrow["number"] or "").split("-")[1]) + 1)
+                        except (IndexError, ValueError):
+                            pass
+                    d["number"] = "%s-%04d" % (prefix, seq)
+                    stats["renumbered"] += 1
+            ins_cols = [c for c in merge_cols if c != "uuid"] + ["uuid"]
+            vals = [d.get(c) for c in merge_cols if c != "uuid"] + [ruuid]
+            if "updated_at" in ins_cols:
+                vals[ins_cols.index("updated_at")] = rut or now_str()
+            conn.execute("INSERT INTO %s (%s) VALUES (%s)"
+                         % (t, ",".join(ins_cols), ",".join("?" for _ in ins_cols)), vals)
+            lid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+            remap[d["id"]] = lid
+            by_uuid[ruuid] = (lid, rut)
+            stats["inserted"] += 1
+            if t == "invoices" and orig_return is not None:
+                pending_return.append((lid, orig_return))
+    return remap
+
+
 # ---------------- sync (via Google Drive desktop folder) ----------------
 def device_name(conn=None):
     close = False
@@ -689,9 +1031,13 @@ def sync_status_payload():
     dev = device_name(conn)
     migrated = get_setting(conn, "migrated_from", "")
     conn.close()
+    lock = sync_read_lock(sdir) if sdir else None
     out = {"sync_dir": sdir, "device": dev, "last_sync": last,
            "configured": bool(sdir), "data_dir": DATA_DIR,
-           "migrated_from": migrated}
+           "migrated_from": migrated,
+           "lock": lock or {},
+           "own_lock": SYNC_STATE["own_lock"],
+           "locked_by": (SYNC_STATE["locked_by"] or {}).get("device", "")}
     if not sdir:
         out["state"] = "not_configured"
         return out
@@ -781,12 +1127,7 @@ def do_sync_pull():
         except OSError:
             pass
         return None, "النسخة الموجودة في الفولدر مش سليمة - جرب تاني بعد ما جوجل درايف يكمّل تحميل"
-    do_backup()
-    src = sqlite3.connect(tmp)
-    dst = sqlite3.connect(DB_PATH)
-    src.backup(dst)
-    src.close()
-    dst.close()
+    stats = merge_remote_db(tmp, meta.get("device", ""))
     try:
         os.remove(tmp)
     except OSError:
@@ -794,8 +1135,13 @@ def do_sync_pull():
     conn = get_db()
     conn.execute("INSERT INTO settings (key, value) VALUES ('sync_last', ?) "
                  "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (meta["ts"],))
+    log_action(conn, user={"username": "system"}, action="مزامنة من درايف",
+               details="دمج نسخة %s: %d جديد، %d تحديث، %d حذف"
+               % (meta.get("device", ""), stats["inserted"], stats["updated"], stats["deleted"]))
     conn.commit()
     conn.close()
+    meta = dict(meta)
+    meta["merge"] = stats
     return meta, None
 
 
@@ -803,12 +1149,16 @@ def do_sync_pull():
 class API:
     # ---------- auth ----------
     def me(q, user):
+        locked = SYNC_STATE["locked_by"] or {}
         return 200, {
             "logged_in": bool(user),
             "needs_setup": users_count() == 0,
             "username": user["username"] if user else "",
             "role": user["role"] if user else "",
             "version": APP_VERSION,
+            "locked_by": locked.get("device", ""),
+            "locked_ts": locked.get("ts", ""),
+            "own_lock": SYNC_STATE["own_lock"],
         }
 
     def setup(body, user):
@@ -936,6 +1286,12 @@ class API:
         log_action(conn, user, "تعديل إعدادات", ", ".join(sorted(body.keys())))
         conn.commit()
         conn.close()
+        if ("sync_dir" in body or "device_name" in body) and not SYNC_STATE["own_lock"]:
+            other = sync_acquire_lock(force=False)
+            if other:
+                SYNC_STATE["locked_by"] = other
+            else:
+                threading.Thread(target=sync_lock_heartbeat, daemon=True).start()
         return 200, {"ok": True}
 
     # ---------- parties (customers & suppliers) ----------
@@ -1543,6 +1899,13 @@ class API:
         if err:
             return 400, {"error": err}
         return 200, {"ok": True, "meta": meta}
+
+    def sync_force_lock(body, user):
+        other = sync_acquire_lock(force=True)
+        if other:
+            return 423, {"error": "locked", "locked_by": other.get("device", "")}
+        SYNC_STATE["locked_by"] = None
+        return 200, {"ok": True, "device": device_name()}
 
     # ---------- treasury ----------
     def list_treasury(q, user):
@@ -2653,6 +3016,7 @@ ROUTES_POST = {
     "/api/restore": (lambda b, u: API.restore_backup(b, u), True),
     "/api/monthly-open": (lambda b, u: API.monthly_open(b, u), True),
     "/api/sync/pull": (lambda b, u: API.sync_pull(b, u), True),
+    "/api/sync/force-lock": (lambda b, u: API.sync_force_lock(b, u), True),
 }
 ROUTES_GET = {
     "/api/me": (API.me, False),
@@ -2800,6 +3164,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(status, obj, hdrs)
             if not user:
                 return self._send(401, {"error": "login_required"})
+            if SYNC_STATE["locked_by"] and path not in ("/api/sync/pull", "/api/sync/force-lock", "/api/sync/status"):
+                lk = SYNC_STATE["locked_by"]
+                return self._send(423, {"error": "device_locked",
+                                        "locked_by": lk.get("device", ""),
+                                        "locked_ts": lk.get("ts", "")})
             if path in ROUTES_POST:
                 fn, adm = ROUTES_POST[path]
                 if adm and user["role"] != "admin":
@@ -2834,6 +3203,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(401, {"error": "login_required"})
             if user["role"] != "admin":
                 return self._send(403, {"error": "admin_required"})
+            if SYNC_STATE["locked_by"]:
+                lk = SYNC_STATE["locked_by"]
+                return self._send(423, {"error": "device_locked",
+                                        "locked_by": lk.get("device", ""),
+                                        "locked_ts": lk.get("ts", "")})
             parts = u.path.strip("/").split("/")
             if len(parts) == 3 and parts[0] == "api":
                 if parts[1] == "invoices":
@@ -3033,6 +3407,7 @@ def main():
             return
     auto_backup_tick()
     threading.Thread(target=auto_backup_loop, daemon=True).start()
+    sync_on_startup()
     try:
         server = ThreadingHTTPServer((HOST, PORT), Handler)
     except OSError:
@@ -3052,6 +3427,8 @@ def main():
         server.serve_forever()
     except KeyboardInterrupt:
         pass
+    finally:
+        sync_on_shutdown()
 
 
 if __name__ == "__main__":
