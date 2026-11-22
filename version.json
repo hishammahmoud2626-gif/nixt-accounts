@@ -1,5 +1,5 @@
 {
-  "version": "1.7.0",
-  "zip_url": "https://github.com/hishammahmoud2626-gif/nixt-accounts/releases/download/v1.7.0/NixtAccounts-1.7.0-Portable.zip",
-  "notes": "لوحة اليوم، تنبيهات الشيكات وأجندتها، ربح الموديلات، عروض الأسعار وتحويلها لفاتورة، كشف حساب PDF وواتساب بضغطة، سجل عمليات موسّع، استعادة النسخ الاحتياطية بضغطة، واستيراد جاهز."
+  "version": "1.7.1",
+  "zip_url": "https://github.com/hishammahmoud2626-gif/nixt-accounts/releases/download/v1.7.1/NixtAccounts-1.7.1-Portable.zip",
+  "notes": "إصلاح شاشة الدخول (رسالة الخطأ الحقيقية + رقم الإصدار ظاهر)، تحديثات تُثبَّت في نفس الفولدر فلا يتكسر الاختصار، تنظيف فولدرات الإصدارات القديمة تلقائيا، وإصلاح ملف استعادة الدخول."
 }
