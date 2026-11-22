@@ -20,6 +20,7 @@ import subprocess
 import sys
 import threading
 import time
+import unicodedata
 import urllib.error
 import urllib.request
 import webbrowser
@@ -29,7 +30,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-APP_VERSION = "1.1.2"
+APP_VERSION = "1.1.3"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
@@ -212,6 +213,7 @@ DEFAULT_SETTINGS = {
     "company_address": "",
     "alert_days": "30",
     "backup_dir": "",
+    "login_show_users": "1",
 }
 
 INVOICE_KINDS = ("sale", "return", "purchase", "purchase_return")
@@ -379,6 +381,37 @@ def auto_backup_tick():
         pass
 
 
+
+def norm_username(s):
+    return unicodedata.normalize("NFC", (s or "").strip())
+
+
+# failed-login protection: per-username counters, lock after 5 fails for 60s
+LOGIN_FAILS = {}
+LOGIN_LOCK = threading.Lock()
+
+
+def login_throttle_check(uname):
+    with LOGIN_LOCK:
+        fails, locked_until = LOGIN_FAILS.get(uname.lower(), (0, 0.0))
+        return time.time() < locked_until
+
+
+def login_throttle_fail(uname):
+    with LOGIN_LOCK:
+        fails, _ = LOGIN_FAILS.get(uname.lower(), (0, 0.0))
+        fails += 1
+        locked_until = time.time() + 60 if fails >= 5 else 0.0
+        if fails >= 5:
+            fails = 0
+        LOGIN_FAILS[uname.lower()] = (fails, locked_until)
+
+
+def login_throttle_clear(uname):
+    with LOGIN_LOCK:
+        LOGIN_FAILS.pop(uname.lower(), None)
+
+
 # ---------------- API ----------------
 class API:
     # ---------- auth ----------
@@ -394,7 +427,7 @@ class API:
     def setup(body, user):
         if users_count() > 0:
             return 400, {"error": "already setup"}
-        uname = (body.get("username") or "").strip()
+        uname = norm_username(body.get("username"))
         pw = body.get("password") or ""
         if len(uname) < 3 or len(pw) < 4:
             return 400, {"error": "اسم المستخدم 3 أحرف على الأقل وكلمة السر 4 على الأقل"}
@@ -407,15 +440,32 @@ class API:
         return 200, {"ok": True, "token": new_session(uid, uname, "admin")}
 
     def login(body, user):
-        uname = (body.get("username") or "").strip()
+        uname = norm_username(body.get("username"))
         pw = body.get("password") or ""
+        if login_throttle_check(uname):
+            return 429, {"error": "محاولات كتير غلط. استنى دقيقة وجرب تاني"}
         conn = get_db()
-        u = conn.execute("SELECT * FROM users WHERE username=?", (uname,)).fetchone()
+        u = conn.execute("SELECT * FROM users WHERE username=? COLLATE NOCASE", (uname,)).fetchone()
         conn.close()
         if not u or not check_password(pw, u["pass_hash"]):
+            login_throttle_fail(uname)
+            time.sleep(0.5)
             return 401, {"error": "بيانات الدخول غير صحيحة"}
+        login_throttle_clear(uname)
         return 200, {"ok": True, "token": new_session(u["id"], u["username"], u["role"]),
                      "username": u["username"], "role": u["role"]}
+
+    def login_users(q, user):
+        conn = get_db()
+        show = get_setting(conn, "login_show_users", "1") == "1"
+        out = []
+        if show and users_count() > 0:
+            for r in conn.execute("SELECT username, role FROM users ORDER BY username"):
+                name = r["username"]
+                initials = "".join(w[0] for w in name.split()[:2]).upper() or name[:1].upper()
+                out.append({"username": name, "role": r["role"], "initials": initials})
+        conn.close()
+        return 200, out
 
     def logout(body, user):
         return 200, {"ok": True}
@@ -442,7 +492,7 @@ class API:
         return 200, out
 
     def create_user(body, user):
-        uname = (body.get("username") or "").strip()
+        uname = norm_username(body.get("username"))
         pw = body.get("password") or ""
         role = body.get("role") if body.get("role") in ("admin", "user") else "user"
         if len(uname) < 3 or len(pw) < 4:
@@ -895,7 +945,19 @@ class API:
         zip_url = info.get("zip_url")
         if not zip_url:
             return 400, {"error": "no zip url"}
+        # safety: backup the database before touching anything
+        try:
+            do_backup()
+        except Exception:
+            pass
         os.makedirs(UPDATES_DIR, exist_ok=True)
+        # clean old update packages
+        for fn in os.listdir(UPDATES_DIR):
+            if fn.startswith("nixt-update-") and fn.endswith(".zip"):
+                try:
+                    os.remove(os.path.join(UPDATES_DIR, fn))
+                except OSError:
+                    pass
         zip_path = os.path.join(UPDATES_DIR, "nixt-update-%s.zip" % latest)
         req = urllib.request.Request(zip_url, headers={"User-Agent": "NixtAccounts/" + APP_VERSION})
         with urllib.request.urlopen(req, timeout=120) as r, open(zip_path, "wb") as f:
@@ -913,6 +975,9 @@ class API:
                 rel = n[len(strip):] if strip and n.startswith(strip) else n
                 if not rel or rel.endswith("/"):
                     continue
+                low = rel.replace("\\", "/").lower()
+                if low.startswith("data/") or low.startswith("backups/") or low == "data" or low == "backups":
+                    continue
                 dest = os.path.join(target, rel.replace("/", os.sep))
                 os.makedirs(os.path.dirname(dest), exist_ok=True)
                 with z.open(n) as srcf, open(dest, "wb") as outf:
@@ -922,14 +987,26 @@ class API:
             dst_d = os.path.join(target, folder)
             if os.path.isdir(src_d):
                 shutil.copytree(src_d, dst_d, dirs_exist_ok=True)
-        bat = os.path.join(UPDATES_DIR, "run-new.bat")
+        # handoff: start the new copy, clean stale pythonw, then retire this folder
+        old_dir = BASE_DIR.rstrip(os.sep)
+        retired = os.path.join(parent, "_old-" + os.path.basename(old_dir))
+        bat = os.path.join(parent, "nixt-run-new.bat")
         new_start = os.path.join(target, "START.bat")
         with open(bat, "w") as f:
-            f.write('@echo off\r\nping -n 4 127.0.0.1 >nul\r\nstart "" "%s"\r\n' % new_start)
+            f.write('@echo off\r\n'
+                    'cd /d "%TEMP%"\r\n'
+                    'ping -n 5 127.0.0.1 >nul\r\n'
+                    'taskkill /F /IM pythonw.exe >nul 2>&1\r\n'
+                    'start "" "%s"\r\n'
+                    'ping -n 6 127.0.0.1 >nul\r\n'
+                    'if exist "%s" rmdir /s /q "%s" >nul 2>&1\r\n'
+                    'ren "%s" "%s" >nul 2>&1\r\n'
+                    'del "%%~f0" >nul 2>&1\r\n'
+                    % (new_start, retired, retired, old_dir, os.path.basename(retired)))
 
         def _handoff():
             try:
-                subprocess.Popen(["cmd", "/c", bat], cwd=UPDATES_DIR)
+                subprocess.Popen(["cmd", "/c", bat], cwd=os.environ.get("TEMP", parent))
             except Exception:
                 pass
             os._exit(0)
@@ -1306,6 +1383,7 @@ ROUTES_POST = {
 }
 ROUTES_GET = {
     "/api/me": (API.me, False),
+    "/api/login_users": (API.login_users, False),
     "/api/version": (lambda q, u: API.version(q), False),
     "/api/customers": (API.list_customers, False),
     "/api/employees": (API.list_employees, False),
@@ -1321,7 +1399,7 @@ ROUTES_GET = {
 STATIC_TYPES = {".html": "text/html; charset=utf-8", ".png": "image/png",
                 ".jpg": "image/jpeg", ".ico": "image/x-icon", ".css": "text/css",
                 ".js": "application/javascript"}
-OPEN_PATHS = {"/api/login", "/api/setup", "/api/me", "/api/version"}
+OPEN_PATHS = {"/api/login", "/api/setup", "/api/me", "/api/version", "/api/login_users"}
 
 
 class Handler(BaseHTTPRequestHandler):
