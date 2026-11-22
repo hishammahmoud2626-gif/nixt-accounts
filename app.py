@@ -26,11 +26,11 @@ import urllib.request
 import webbrowser
 import zipfile
 import xml.etree.ElementTree as ET
-from datetime import datetime
+from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-APP_VERSION = "1.1.4"
+APP_VERSION = "1.2.0"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
@@ -194,6 +194,36 @@ CREATE TABLE IF NOT EXISTS imports (
   summary TEXT DEFAULT '',
   created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS treasury (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  date TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'in',
+  category TEXT DEFAULT '',
+  amount REAL DEFAULT 0,
+  notes TEXT DEFAULT '',
+  source TEXT DEFAULT 'manual',
+  source_id INTEGER,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS cheques (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  customer_id INTEGER NOT NULL REFERENCES customers(id),
+  payment_id INTEGER,
+  due_date TEXT NOT NULL,
+  amount REAL DEFAULT 0,
+  bank TEXT DEFAULT '',
+  cheque_number TEXT DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'pending',
+  notes TEXT DEFAULT '',
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS activity_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts TEXT NOT NULL,
+  username TEXT DEFAULT '',
+  action TEXT NOT NULL,
+  details TEXT DEFAULT ''
+);
 """
 
 # columns added after 1.0.0: (table, column, ddl)
@@ -205,6 +235,8 @@ MIGRATIONS = [
     ("customers", "opening", "ALTER TABLE customers ADD COLUMN opening REAL DEFAULT 0"),
     ("customers", "opening_date", "ALTER TABLE customers ADD COLUMN opening_date TEXT DEFAULT ''"),
     ("payments", "direction", "ALTER TABLE payments ADD COLUMN direction TEXT NOT NULL DEFAULT 'in'"),
+    ("payments", "cheque", "ALTER TABLE payments ADD COLUMN cheque REAL DEFAULT 0"),
+    ("invoices", "reason", "ALTER TABLE invoices ADD COLUMN reason TEXT DEFAULT ''"),
 ]
 
 DEFAULT_SETTINGS = {
@@ -214,6 +246,8 @@ DEFAULT_SETTINGS = {
     "alert_days": "30",
     "backup_dir": "",
     "login_show_users": "1",
+    "sync_dir": "",
+    "device_name": "",
 }
 
 INVOICE_KINDS = ("sale", "return", "purchase", "purchase_return")
@@ -314,6 +348,14 @@ def invoice_net(inv_id, conn):
     return items + (inv["shipping"] or 0) + (inv["other_charges"] or 0) - (inv["discount"] or 0)
 
 
+def log_action(conn, user, action, details=""):
+    try:
+        conn.execute("INSERT INTO activity_log (ts, username, action, details) VALUES (?,?,?,?)",
+                     (now_str(), (user or {}).get("username", ""), action, details))
+    except sqlite3.Error:
+        pass
+
+
 def party_balance(conn, pid):
     """Positive = customer owes us / we owe supplier."""
     p = conn.execute("SELECT * FROM customers WHERE id=?", (pid,)).fetchone()
@@ -326,7 +368,7 @@ def party_balance(conn, pid):
         net = invoice_net(inv["id"], conn)
         bal += net if inv["kind"] == sale_kind else -net
     for pm in conn.execute("SELECT * FROM payments WHERE customer_id=?", (pid,)):
-        total = (pm["cash"] or 0) + (pm["card"] or 0) + (pm["transfer"] or 0)
+        total = (pm["cash"] or 0) + (pm["card"] or 0) + (pm["transfer"] or 0) + (pm["cheque"] or 0)
         bal -= total  # 'in' from customer or 'out' to supplier both reduce balance
     le = conn.execute("SELECT COALESCE(SUM(debit-credit),0) s FROM ledger_entries WHERE customer_id=?",
                       (pid,)).fetchone()["s"]
@@ -410,6 +452,180 @@ def login_throttle_fail(uname):
 def login_throttle_clear(uname):
     with LOGIN_LOCK:
         LOGIN_FAILS.pop(uname.lower(), None)
+
+
+
+# ---------------- sync (via Google Drive desktop folder) ----------------
+def device_name(conn=None):
+    close = False
+    if conn is None:
+        conn, close = get_db(), True
+    name = get_setting(conn, "device_name", "").strip()
+    if close:
+        conn.close()
+    if name:
+        return name
+    import platform
+    return platform.node() or "جهاز"
+
+
+def detect_sync_dir():
+    up = os.environ.get("USERPROFILE", "")
+    home = os.path.expanduser("~")
+    cands = [os.path.join(up, "Google Drive", "My Drive"),
+             os.path.join(up, "My Drive"),
+             "G:\\My Drive",
+             os.path.join(home, "Google Drive", "My Drive"),
+             os.path.join(home, "My Drive")]
+    for base in cands:
+        if base and os.path.isdir(base):
+            return os.path.join(base, "NixtSync")
+    return ""
+
+
+def sync_dir(conn=None):
+    close = False
+    if conn is None:
+        conn, close = get_db(), True
+    d = get_setting(conn, "sync_dir", "").strip() or detect_sync_dir()
+    if close:
+        conn.close()
+    return d
+
+
+def sync_remote_meta(sdir):
+    try:
+        with open(os.path.join(sdir, "nixt-sync-meta.json"), encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def db_mtime_iso():
+    try:
+        return datetime.utcfromtimestamp(os.path.getmtime(DB_PATH)).strftime("%Y-%m-%dT%H:%M:%S")
+    except OSError:
+        return ""
+
+
+def sync_snapshot_path(sdir, ts, dev):
+    safe = "".join(c if c.isalnum() or c in "-_" else "-" for c in dev)
+    return os.path.join(sdir, "nixt-sync-%s-%s.db" % (ts.replace(":", "").replace("-", ""), safe))
+
+
+def sync_status_payload():
+    conn = get_db()
+    sdir = sync_dir(conn)
+    last = get_setting(conn, "sync_last", "")
+    dev = device_name(conn)
+    conn.close()
+    out = {"sync_dir": sdir, "device": dev, "last_sync": last,
+           "configured": bool(sdir)}
+    if not sdir:
+        out["state"] = "not_configured"
+        return out
+    if not os.path.isdir(sdir):
+        try:
+            os.makedirs(sdir, exist_ok=True)
+        except OSError:
+            out["state"] = "dir_missing"
+            return out
+    remote = sync_remote_meta(sdir)
+    local_ts = db_mtime_iso()
+    out["local_ts"] = local_ts
+    out["remote"] = remote
+    if not remote:
+        out["state"] = "local_only"
+        return out
+    rts = remote.get("ts", "")
+    if last and rts > last and local_ts > last:
+        out["state"] = "conflict"
+    elif rts > local_ts and remote.get("device") != dev:
+        out["state"] = "remote_newer"
+    elif local_ts > rts:
+        out["state"] = "local_newer"
+    else:
+        out["state"] = "up_to_date"
+    return out
+
+
+def do_sync_push():
+    sdir = sync_dir()
+    if not sdir:
+        return None, "حدد فولدر المزامنة من الإعدادات الأول"
+    os.makedirs(sdir, exist_ok=True)
+    ts = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
+    dev = device_name()
+    dest = sync_snapshot_path(sdir, ts, dev)
+    src = sqlite3.connect(DB_PATH)
+    dst = sqlite3.connect(dest)
+    src.backup(dst)
+    dst.close()
+    src.close()
+    import hashlib as _hl
+    h = _hl.sha1()
+    with open(dest, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    meta = {"ts": ts, "device": dev, "size": os.path.getsize(dest),
+            "sha1": h.hexdigest(), "file": os.path.basename(dest),
+            "app_version": APP_VERSION}
+    with open(os.path.join(sdir, "nixt-sync-meta.json"), "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False)
+    # keep the newest 5 snapshots
+    snaps = sorted(fn for fn in os.listdir(sdir)
+                   if fn.startswith("nixt-sync-") and fn.endswith(".db"))
+    for old in snaps[:-5]:
+        try:
+            os.remove(os.path.join(sdir, old))
+        except OSError:
+            pass
+    conn = get_db()
+    conn.execute("INSERT INTO settings (key, value) VALUES ('sync_last', ?) "
+                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (ts,))
+    conn.commit()
+    conn.close()
+    return meta, None
+
+
+def do_sync_pull():
+    sdir = sync_dir()
+    meta = sync_remote_meta(sdir) if sdir else None
+    if not meta:
+        return None, "مفيش نسخة مرفوعة في فولدر المزامنة"
+    src_path = os.path.join(sdir, meta.get("file", ""))
+    if not os.path.isfile(src_path):
+        return None, "ملف النسخة مش موجود في الفولدر (يمدّي لسه بيتحمّل من جوجل درايف)"
+    tmp = os.path.join(DATA_DIR, "sync-incoming.db")
+    shutil.copyfile(src_path, tmp)
+    try:
+        chk = sqlite3.connect(tmp)
+        ok = chk.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+        chk.close()
+    except sqlite3.Error:
+        ok = False
+    if not ok:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        return None, "النسخة الموجودة في الفولدر مش سليمة - جرب تاني بعد ما جوجل درايف يكمّل تحميل"
+    do_backup()
+    src = sqlite3.connect(tmp)
+    dst = sqlite3.connect(DB_PATH)
+    src.backup(dst)
+    src.close()
+    dst.close()
+    try:
+        os.remove(tmp)
+    except OSError:
+        pass
+    conn = get_db()
+    conn.execute("INSERT INTO settings (key, value) VALUES ('sync_last', ?) "
+                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (meta["ts"],))
+    conn.commit()
+    conn.close()
+    return meta, None
 
 
 # ---------------- API ----------------
@@ -579,6 +795,9 @@ class API:
              body.get("code", ""), body.get("address", ""),
              float(body.get("credit_limit") or 0), float(body.get("opening") or 0),
              body.get("opening_date", ""), now_str()))
+        log_action(conn, user, "طرف جديد",
+                   ("%s - %s" % ("عميل" if kind == "customer" else "مورد",
+                                 (body.get("name") or "").strip())))
         conn.commit()
         cid = cur.lastrowid
         conn.close()
@@ -681,6 +900,8 @@ class API:
              float(body.get("shipping") or 0), float(body.get("other_charges") or 0),
              float(body.get("discount") or 0), body.get("notes", ""), now_str()))
         iid = cur.lastrowid
+        if kind in ("return", "purchase_return") and body.get("reason"):
+            conn.execute("UPDATE invoices SET reason=? WHERE id=?", (body.get("reason", ""), iid))
         for it in body.get("items", []):
             if not (it.get("item_name") or "").strip():
                 continue
@@ -688,6 +909,9 @@ class API:
                 "INSERT INTO invoice_items (invoice_id, item_name, color, pairs, price) VALUES (?,?,?,?,?)",
                 (iid, it["item_name"].strip(), it.get("color", ""),
                  float(it.get("pairs") or 0), float(it.get("price") or 0)))
+        net0 = invoice_net(iid, conn)
+        log_action(conn, user, "فاتورة جديدة" if kind in ("sale", "purchase") else "مرتجع جديد",
+                   "رقم %s - صافي %s" % (iid, round(net0, 2)))
         conn.commit()
         net = invoice_net(iid, conn)
         conn.close()
@@ -731,7 +955,7 @@ class API:
         sql += " ORDER BY p.date DESC, p.id DESC"
         out = rows(conn.execute(sql, args))
         for p in out:
-            p["total"] = round((p["cash"] or 0) + (p["card"] or 0) + (p["transfer"] or 0), 2)
+            p["total"] = round((p["cash"] or 0) + (p["card"] or 0) + (p["transfer"] or 0) + (p["cheque"] or 0), 2)
         conn.close()
         return 200, out
 
@@ -740,22 +964,52 @@ class API:
         if not cid:
             return 400, {"error": "اختر الطرف أولاً"}
         conn = get_db()
-        party = conn.execute("SELECT kind FROM customers WHERE id=?", (cid,)).fetchone()
+        party = conn.execute("SELECT * FROM customers WHERE id=?", (cid,)).fetchone()
         direction = body.get("direction") or ("out" if (party and party["kind"] == "supplier") else "in")
+        cash = float(body.get("cash") or 0)
+        card = float(body.get("card") or 0)
+        transfer = float(body.get("transfer") or 0)
+        cheque = float(body.get("cheque") or 0)
+        pdate = body.get("date") or datetime.now().strftime("%Y-%m-%d")
         cur = conn.execute(
-            "INSERT INTO payments (customer_id, date, cash, card, transfer, notes, direction, created_at)"
-            " VALUES (?,?,?,?,?,?,?,?)",
-            (cid, body.get("date") or datetime.now().strftime("%Y-%m-%d"),
-             float(body.get("cash") or 0), float(body.get("card") or 0),
-             float(body.get("transfer") or 0), body.get("notes", ""), direction, now_str()))
-        conn.commit()
+            "INSERT INTO payments (customer_id, date, cash, card, transfer, cheque, notes, direction, created_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?)",
+            (cid, pdate, cash, card, transfer, cheque, body.get("notes", ""), direction, now_str()))
         pid = cur.lastrowid
+        if cheque > 0:
+            due = (body.get("cheque_due") or "").strip()
+            if not due:
+                conn.close()
+                return 400, {"error": "اكتب تاريخ استحقاق الشيك"}
+            conn.execute(
+                "INSERT INTO cheques (customer_id, payment_id, due_date, amount, bank, cheque_number, notes, created_at)"
+                " VALUES (?,?,?,?,?,?,?,?)",
+                (cid, pid, due, cheque, body.get("cheque_bank", ""),
+                 body.get("cheque_number", ""), body.get("notes", ""), now_str()))
+        instant = cash + card + transfer
+        if instant > 0:
+            cat = "تحصيل من عميل" if direction == "in" else "دفع لمورد"
+            conn.execute(
+                "INSERT INTO treasury (date, kind, category, amount, notes, source, source_id, created_at)"
+                " VALUES (?,?,?,?,?,?,?,?)",
+                (pdate, direction, cat, instant, body.get("notes", ""), "payment", pid, now_str()))
+        name = party["name"] if party else ""
+        log_action(conn, user, "دفعة جديدة",
+                   "%s - %s - إجمالي %s" % (name, pdate, round(instant + cheque, 2)))
+        conn.commit()
         conn.close()
         return 200, {"id": pid}
 
-    def delete_payment(pid):
+    def delete_payment(pid, user=None):
         conn = get_db()
+        pm = conn.execute("SELECT * FROM payments WHERE id=?", (pid,)).fetchone()
         conn.execute("DELETE FROM payments WHERE id=?", (pid,))
+        conn.execute("DELETE FROM cheques WHERE payment_id=?", (pid,))
+        conn.execute("DELETE FROM treasury WHERE source='payment' AND source_id=?", (pid,))
+        if pm:
+            cust = conn.execute("SELECT name FROM customers WHERE id=?", (pm["customer_id"],)).fetchone()
+            log_action(conn, user, "حذف دفعة",
+                       "%s - %s" % (cust["name"] if cust else pm["customer_id"], pm["date"]))
         conn.commit()
         conn.close()
         return 200, {"ok": True}
@@ -911,6 +1165,10 @@ class API:
         out["debtors"] = debtors[:10]
         out["creditors"] = creditors[:10]
         out["alerts"] = {"over_limit": over_limit, "stale": stale[:10]}
+        soon7 = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d")
+        out["cheques_due"] = rows(conn.execute(
+            "SELECT c.*, cu.name AS customer_name FROM cheques c JOIN customers cu ON cu.id=c.customer_id"
+            " WHERE c.status='pending' AND c.due_date<=? ORDER BY c.due_date", (soon7,)))
         conn.close()
         return 200, out
 
@@ -1013,6 +1271,194 @@ class API:
 
         threading.Timer(1.0, _handoff).start()
         return 200, {"ok": True, "new_folder": target, "version": latest}
+
+    def wipe(body, user):
+        if (body.get("confirm") or "").strip() != "تصفير":
+            return 400, {"error": "اكتب كلمة تصفير في الخانة الأول"}
+        try:
+            backup_path = do_backup()
+        except Exception as e:
+            return 500, {"error": "فشل أخذ نسخة احتياطية قبل التصفير: %s" % e}
+        conn = get_db()
+        counts = {}
+        for table in ("invoice_items", "invoices", "payments", "ledger_entries",
+                      "imports", "customers", "employees"):
+            counts[table] = conn.execute("SELECT COUNT(*) c FROM %s" % table).fetchone()["c"]
+            conn.execute("DELETE FROM %s" % table)
+        try:
+            conn.execute("DELETE FROM sqlite_sequence WHERE name IN "
+                         "('invoice_items','invoices','payments','ledger_entries','imports','customers','employees')")
+        except sqlite3.Error:
+            pass
+        conn.commit()
+        conn.close()
+        return 200, {"ok": True, "backup": backup_path, "removed": counts}
+
+    def sync_status(q, user):
+        return 200, sync_status_payload()
+
+    def sync_push(body, user):
+        meta, err = do_sync_push()
+        if err:
+            return 400, {"error": err}
+        return 200, {"ok": True, "meta": meta}
+
+    def sync_pull(body, user):
+        meta, err = do_sync_pull()
+        if err:
+            return 400, {"error": err}
+        return 200, {"ok": True, "meta": meta}
+
+    # ---------- treasury ----------
+    def list_treasury(q, user):
+        month = q.get("month", [""])[0]
+        conn = get_db()
+        if month:
+            ent = rows(conn.execute("SELECT * FROM treasury WHERE date LIKE ? ORDER BY date DESC, id DESC", (month + "%",)))
+        else:
+            ent = rows(conn.execute("SELECT * FROM treasury ORDER BY date DESC, id DESC LIMIT 300"))
+        tot_in = sum(e["amount"] for e in ent if e["kind"] == "in")
+        tot_out = sum(e["amount"] for e in ent if e["kind"] == "out")
+        conn.close()
+        return 200, {"entries": ent, "total_in": round(tot_in, 2),
+                     "total_out": round(tot_out, 2), "net": round(tot_in - tot_out, 2)}
+
+    def create_treasury(body, user):
+        kind = body.get("kind") if body.get("kind") in ("in", "out") else "out"
+        amount = float(body.get("amount") or 0)
+        if amount <= 0:
+            return 400, {"error": "اكتب مبلغ صحيح"}
+        conn = get_db()
+        cur = conn.execute(
+            "INSERT INTO treasury (date, kind, category, amount, notes, source, created_at)"
+            " VALUES (?,?,?,?,?,?,?)",
+            (body.get("date") or datetime.now().strftime("%Y-%m-%d"), kind,
+             (body.get("category") or "").strip(), amount, body.get("notes", ""),
+             "manual", now_str()))
+        log_action(conn, user, "قيد خزينة",
+                   "%s - %s - %s" % ("قبض" if kind == "in" else "صرف",
+                                     body.get("category") or "", round(amount, 2)))
+        conn.commit()
+        tid = cur.lastrowid
+        conn.close()
+        return 200, {"id": tid}
+
+    def delete_treasury(tid, user=None):
+        conn = get_db()
+        e = conn.execute("SELECT * FROM treasury WHERE id=?", (tid,)).fetchone()
+        if e and e["source"] != "manual":
+            conn.close()
+            return 400, {"error": "القيد ده اتولّد من دفعة - احذف الدفعة نفسها"}
+        conn.execute("DELETE FROM treasury WHERE id=?", (tid,))
+        if e:
+            log_action(conn, user, "حذف قيد خزينة", "%s - %s" % (e["category"], e["amount"]))
+        conn.commit()
+        conn.close()
+        return 200, {"ok": True}
+
+    # ---------- cheques ----------
+    def list_cheques(q, user):
+        status = q.get("status", [""])[0]
+        conn = get_db()
+        sql = ("SELECT c.*, cu.name AS customer_name, cu.kind AS party_kind FROM cheques c "
+               "JOIN customers cu ON cu.id=c.customer_id")
+        args = []
+        if status:
+            sql += " WHERE c.status=?"
+            args.append(status)
+        sql += " ORDER BY c.due_date, c.id"
+        out = rows(conn.execute(sql, args))
+        conn.close()
+        today = datetime.now().strftime("%Y-%m-%d")
+        for c in out:
+            c["overdue"] = c["status"] == "pending" and c["due_date"] < today
+        return 200, out
+
+    def set_cheque_status(cid, body, user):
+        st = body.get("status")
+        if st not in ("pending", "cashed", "bounced"):
+            return 400, {"error": "حالة غير صحيحة"}
+        conn = get_db()
+        c = conn.execute("SELECT * FROM cheques WHERE id=?", (cid,)).fetchone()
+        if not c:
+            conn.close()
+            return 404, {"error": "not found"}
+        conn.execute("UPDATE cheques SET status=? WHERE id=?", (st, cid))
+        if st == "cashed" and c["status"] != "cashed":
+            cust = conn.execute("SELECT * FROM customers WHERE id=?", (c["customer_id"],)).fetchone()
+            direction = "out" if (cust and cust["kind"] == "supplier") else "in"
+            cat = "صرف شيك لمورد" if direction == "out" else "تحصيل شيك"
+            conn.execute(
+                "INSERT INTO treasury (date, kind, category, amount, notes, source, source_id, created_at)"
+                " VALUES (?,?,?,?,?,?,?,?)",
+                (datetime.now().strftime("%Y-%m-%d"), direction, cat, c["amount"],
+                 "شيك " + (c["cheque_number"] or ""), "cheque", cid, now_str()))
+        log_action(conn, user, "حالة شيك",
+                   "شيك %s - %s" % (c["cheque_number"] or cid,
+                                    {"pending": "تحت التحصيل", "cashed": "تم الصرف", "bounced": "مرتجع"}[st]))
+        conn.commit()
+        conn.close()
+        return 200, {"ok": True}
+
+    # ---------- aging ----------
+    def aging(q, user):
+        today = datetime.now().date()
+        conn = get_db()
+        out = []
+        for p in conn.execute("SELECT * FROM customers WHERE kind='customer' ORDER BY name"):
+            invs = rows(conn.execute(
+                "SELECT * FROM invoices WHERE customer_id=? AND kind='sale' ORDER BY date, id", (p["id"],)))
+            credit = (p["opening"] or 0)
+            for r in conn.execute("SELECT * FROM invoices WHERE customer_id=? AND kind='return'", (p["id"],)):
+                credit -= invoice_net(r["id"], conn)
+            for pm in conn.execute("SELECT * FROM payments WHERE customer_id=?", (p["id"],)):
+                credit -= (pm["cash"] or 0) + (pm["card"] or 0) + (pm["transfer"] or 0) + (pm["cheque"] or 0)
+            buckets = {"b0": 0.0, "b30": 0.0, "b60": 0.0, "b90": 0.0}
+            paid = -credit if credit < 0 else 0.0
+            if credit > 0:
+                buckets["b90"] += credit
+            for inv in invs:
+                net = invoice_net(inv["id"], conn)
+                remaining = net
+                if paid > 0:
+                    use = min(paid, remaining)
+                    remaining -= use
+                    paid -= use
+                if remaining > 0.005:
+                    try:
+                        age = (today - datetime.strptime(inv["date"], "%Y-%m-%d").date()).days
+                    except ValueError:
+                        age = 0
+                    if age <= 30:
+                        buckets["b0"] += remaining
+                    elif age <= 60:
+                        buckets["b30"] += remaining
+                    elif age <= 90:
+                        buckets["b60"] += remaining
+                    else:
+                        buckets["b90"] += remaining
+            total = round(sum(buckets.values()), 2)
+            if total > 0.005:
+                out.append({"id": p["id"], "name": p["name"], "phone": p["phone"],
+                            "credit_limit": p["credit_limit"] or 0,
+                            "current": round(buckets["b0"], 2), "d30": round(buckets["b30"], 2),
+                            "d60": round(buckets["b60"], 2), "d90": round(buckets["b90"], 2),
+                            "total": total})
+        conn.close()
+        out.sort(key=lambda x: -x["d60"] - x["d90"])
+        return 200, {"customers": out,
+                     "totals": {"current": round(sum(c["current"] for c in out), 2),
+                                "d30": round(sum(c["d30"] for c in out), 2),
+                                "d60": round(sum(c["d60"] for c in out), 2),
+                                "d90": round(sum(c["d90"] for c in out), 2),
+                                "total": round(sum(c["total"] for c in out), 2)}}
+
+    # ---------- activity log ----------
+    def list_activity(q, user):
+        conn = get_db()
+        out = rows(conn.execute("SELECT * FROM activity_log ORDER BY id DESC LIMIT 200"))
+        conn.close()
+        return 200, out
 
 
 # ---------------- import ----------------
@@ -1376,10 +1822,12 @@ ROUTES_POST = {
     "/api/backup": (lambda b, u: API.backup({}, u), False),
     "/api/settings": (lambda b, u: API.save_settings(b, u), True),
     "/api/users": (lambda b, u: API.create_user(b, u), True),
-    "/api/import/medo": (lambda b, u: api_import_medo(b, u), True),
-    "/api/import/medo-full": (lambda b, u: api_import_medo_full(b, u), True),
     "/api/import/parties": (lambda b, u: api_import_parties(b, u), True),
     "/api/do-update": (lambda b, u: API.do_update(b, u), True),
+    "/api/wipe": (lambda b, u: API.wipe(b, u), True),
+    "/api/sync/push": (lambda b, u: API.sync_push(b, u), True),
+    "/api/treasury": (lambda b, u: API.create_treasury(b, u), False),
+    "/api/sync/pull": (lambda b, u: API.sync_pull(b, u), True),
 }
 ROUTES_GET = {
     "/api/me": (API.me, False),
@@ -1392,6 +1840,11 @@ ROUTES_GET = {
     "/api/statement": (API.statement, False),
     "/api/dashboard": (API.dashboard, False),
     "/api/settings": (API.get_settings, False),
+    "/api/sync/status": (API.sync_status, True),
+    "/api/treasury": (API.list_treasury, False),
+    "/api/cheques": (API.list_cheques, False),
+    "/api/aging": (API.aging, False),
+    "/api/activity": (API.list_activity, True),
     "/api/users": (API.list_users, True),
     "/api/check-update": (API.check_update, False),
 }
@@ -1512,6 +1965,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(*fn(body, user))
             if path.startswith("/api/employees/") and path.endswith("/toggle"):
                 return self._send(*API.toggle_employee(int(path.split("/")[3]), user))
+            if path.startswith("/api/cheques/") and path.endswith("/status"):
+                return self._send(*API.set_cheque_status(int(path.split("/")[3]), body, user))
             if path.startswith("/api/customers/"):
                 return self._send(*API.update_customer(int(path.rsplit("/", 1)[1]), body, user))
             if path.startswith("/api/users/") and path.endswith("/reset"):
@@ -1536,7 +1991,9 @@ class Handler(BaseHTTPRequestHandler):
                 if parts[1] == "invoices":
                     return self._send(*API.delete_invoice(int(parts[2])))
                 if parts[1] == "payments":
-                    return self._send(*API.delete_payment(int(parts[2])))
+                    return self._send(*API.delete_payment(int(parts[2]), user))
+                if parts[1] == "treasury":
+                    return self._send(*API.delete_treasury(int(parts[2]), user))
                 if parts[1] == "customers":
                     return self._send(*API.delete_customer(int(parts[2])))
                 if parts[1] == "users":
