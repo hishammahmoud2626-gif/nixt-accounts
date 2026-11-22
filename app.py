@@ -31,7 +31,7 @@ from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-APP_VERSION = "1.5.1"
+APP_VERSION = "1.6.0"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -268,6 +268,7 @@ MIGRATIONS = [
     ("payments", "direction", "ALTER TABLE payments ADD COLUMN direction TEXT NOT NULL DEFAULT 'in'"),
     ("payments", "cheque", "ALTER TABLE payments ADD COLUMN cheque REAL DEFAULT 0"),
     ("invoices", "reason", "ALTER TABLE invoices ADD COLUMN reason TEXT DEFAULT ''"),
+    ("invoices", "number", "ALTER TABLE invoices ADD COLUMN number TEXT DEFAULT ''"),
     ("cheques", "endorsed_to", "ALTER TABLE cheques ADD COLUMN endorsed_to INTEGER"),
     ("cheques", "endorsed_date", "ALTER TABLE cheques ADD COLUMN endorsed_date TEXT DEFAULT ''"),
     ("cheques", "endorsed_note", "ALTER TABLE cheques ADD COLUMN endorsed_note TEXT DEFAULT ''"),
@@ -291,6 +292,7 @@ DEFAULT_SETTINGS = {
 }
 
 INVOICE_KINDS = ("sale", "return", "purchase", "purchase_return")
+INV_NUMBER_PREFIX = {"sale": "S", "return": "SR", "purchase": "P", "purchase_return": "PR"}
 KIND_LABELS = {"sale": "فاتورة بيع", "return": "مرتجع بيع",
                "purchase": "فاتورة شراء", "purchase_return": "مرتجع شراء"}
 PARTY_KIND_FOR_INVOICE = {"sale": "customer", "return": "customer",
@@ -400,6 +402,14 @@ def init_db():
     if MIGRATED_FROM:
         conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?,?)",
                      ("migrated_from", MIGRATED_FROM))
+    # backfill invoice numbers (added in 1.6.0)
+    counts = {}
+    for r in conn.execute("SELECT kind, COUNT(*) c FROM invoices WHERE number != '' GROUP BY kind"):
+        counts[r["kind"]] = r["c"]
+    for r in conn.execute("SELECT id, kind FROM invoices WHERE number = '' ORDER BY id"):
+        counts[r["kind"]] = counts.get(r["kind"], 0) + 1
+        conn.execute("UPDATE invoices SET number=? WHERE id=?",
+                     (INV_NUMBER_PREFIX.get(r["kind"], "X") + "-%04d" % counts[r["kind"]], r["id"]))
     conn.commit()
     conn.close()
 
@@ -407,6 +417,24 @@ def init_db():
 def get_setting(conn, key, default=""):
     r = conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
     return r["value"] if r else default
+
+
+def closed_months_list(conn):
+    try:
+        return json.loads(get_setting(conn, "closed_months", "[]")) or []
+    except Exception:
+        return []
+
+
+def month_is_closed(conn, date_str):
+    m = (date_str or "")[:7]
+    return bool(m) and m in closed_months_list(conn)
+
+
+def set_closed_months(conn, lst):
+    conn.execute("INSERT INTO settings (key, value) VALUES ('closed_months', ?) "
+                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                 (json.dumps(lst, ensure_ascii=False),))
 
 
 # ---------------- auth ----------------
@@ -833,7 +861,7 @@ class API:
     def create_user(body, user):
         uname = norm_username(body.get("username"))
         pw = body.get("password") or ""
-        role = body.get("role") if body.get("role") in ("admin", "user") else "user"
+        role = body.get("role") if body.get("role") in ("admin", "user", "accountant") else "user"
         if len(uname) < 3 or len(pw) < 4:
             return 400, {"error": "اسم المستخدم 3 أحرف على الأقل وكلمة السر 4 على الأقل"}
         conn = get_db()
@@ -1015,13 +1043,26 @@ class API:
         kind = body.get("kind", "sale")
         if kind not in INVOICE_KINDS:
             return 400, {"error": "نوع غير صحيح"}
+        idate = body.get("date") or datetime.now().strftime("%Y-%m-%d")
         conn = get_db()
+        if month_is_closed(conn, idate):
+            conn.close()
+            return 400, {"error": "شهر " + idate[:7] + " متقفل - افتحه من تاب التقارير لو محتاج تسجل فيه"}
+        last = conn.execute("SELECT number FROM invoices WHERE kind=? AND number != '' "
+                            "ORDER BY id DESC LIMIT 1", (kind,)).fetchone()
+        seq = 1
+        if last and last["number"]:
+            try:
+                seq = int(str(last["number"]).split("-")[1]) + 1
+            except (IndexError, ValueError):
+                seq = conn.execute("SELECT COUNT(*) c FROM invoices WHERE kind=?", (kind,)).fetchone()["c"] + 1
+        number = INV_NUMBER_PREFIX.get(kind, "X") + "-%04d" % seq
         cur = conn.execute(
-            "INSERT INTO invoices (customer_id, date, kind, shipping, other_charges, discount, notes, created_at)"
-            " VALUES (?,?,?,?,?,?,?,?)",
-            (cid, body.get("date") or datetime.now().strftime("%Y-%m-%d"), kind,
+            "INSERT INTO invoices (customer_id, date, kind, shipping, other_charges, discount, notes, number, created_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?)",
+            (cid, idate, kind,
              float(body.get("shipping") or 0), float(body.get("other_charges") or 0),
-             float(body.get("discount") or 0), body.get("notes", ""), now_str()))
+             float(body.get("discount") or 0), body.get("notes", ""), number, now_str()))
         iid = cur.lastrowid
         if kind in ("return", "purchase_return"):
             if body.get("reason"):
@@ -1037,11 +1078,11 @@ class API:
                  float(it.get("pairs") or 0), float(it.get("price") or 0)))
         net0 = invoice_net(iid, conn)
         log_action(conn, user, "فاتورة جديدة" if kind in ("sale", "purchase") else "مرتجع جديد",
-                   "رقم %s - صافي %s" % (iid, round(net0, 2)))
+                   "رقم %s - صافي %s" % (number, round(net0, 2)))
         conn.commit()
         net = invoice_net(iid, conn)
         conn.close()
-        return 200, {"id": iid, "net": round(net, 2)}
+        return 200, {"id": iid, "number": number, "net": round(net, 2)}
 
     def get_invoice(iid, user):
         conn = get_db()
@@ -1085,6 +1126,18 @@ class API:
         conn.close()
         return 200, out
 
+    def get_payment(pid, user):
+        conn = get_db()
+        r = conn.execute("SELECT p.*, c.name AS customer_name, c.kind AS party_kind"
+                         " FROM payments p JOIN customers c ON c.id=p.customer_id"
+                         " WHERE p.id=?", (pid,)).fetchone()
+        conn.close()
+        if not r:
+            return 404, {"error": "الدفعة مش موجودة"}
+        p = dict(r)
+        p["total"] = round((p["cash"] or 0) + (p["card"] or 0) + (p["transfer"] or 0) + (p["cheque"] or 0) + (p["vcash"] or 0), 2)
+        return 200, p
+
     def create_payment(body, user):
         cid = body.get("customer_id")
         if not cid:
@@ -1098,6 +1151,9 @@ class API:
         vcash = float(body.get("vcash") or 0)
         cheque = float(body.get("cheque") or 0)
         pdate = body.get("date") or datetime.now().strftime("%Y-%m-%d")
+        if month_is_closed(conn, pdate):
+            conn.close()
+            return 400, {"error": "شهر " + pdate[:7] + " متقفل - افتحه من تاب التقارير لو محتاج تسجل فيه"}
         cur = conn.execute(
             "INSERT INTO payments (customer_id, date, cash, card, transfer, cheque, vcash, notes, direction, created_at)"
             " VALUES (?,?,?,?,?,?,?,?,?,?)",
@@ -1512,6 +1568,10 @@ class API:
         if amount <= 0:
             return 400, {"error": "اكتب مبلغ صحيح"}
         conn = get_db()
+        tdate = body.get("date") or datetime.now().strftime("%Y-%m-%d")
+        if month_is_closed(conn, tdate):
+            conn.close()
+            return 400, {"error": "شهر " + tdate[:7] + " متقفل - افتحه من تاب التقارير لو محتاج تسجل فيه"}
         method = body.get("method") if body.get("method") in ("cash", "vcash", "transfer", "card") else "cash"
         cur = conn.execute(
             "INSERT INTO treasury (date, kind, category, amount, notes, source, method, created_at)"
@@ -1722,6 +1782,139 @@ class API:
         return 200, out
 
     # ---------- price lists ----------
+    def top_items(q, user):
+        dfrom = q.get("from", [""])[0]
+        dto = q.get("to", [""])[0]
+        cond = "i.kind IN ('sale','return')"
+        args = []
+        if dfrom:
+            cond += " AND i.date>=?"
+            args.append(dfrom)
+        if dto:
+            cond += " AND i.date<=?"
+            args.append(dto)
+        conn = get_db()
+        by_item, by_color = {}, {}
+        sign = {"sale": 1.0, "return": -1.0}
+        for r in conn.execute(
+                "SELECT i.kind, it.item_name, it.color, it.pairs, it.price FROM invoice_items it "
+                "JOIN invoices i ON i.id=it.invoice_id WHERE " + cond, args):
+            s = sign.get(r["kind"], 1.0)
+            name = (r["item_name"] or "").strip()
+            if not name:
+                continue
+            color = (r["color"] or "").strip() or "بدون لون"
+            pairs = s * (r["pairs"] or 0)
+            total = s * (r["pairs"] or 0) * (r["price"] or 0)
+            a = by_item.setdefault(name, {"item_name": name, "pairs": 0.0, "total": 0.0})
+            a["pairs"] += pairs
+            a["total"] += total
+            b = by_color.setdefault(color, {"color": color, "pairs": 0.0, "total": 0.0})
+            b["pairs"] += pairs
+            b["total"] += total
+        conn.close()
+        items = sorted(by_item.values(), key=lambda x: -x["pairs"])[:30]
+        colors = sorted(by_color.values(), key=lambda x: -x["pairs"])[:30]
+        for arr in (items, colors):
+            for x in arr:
+                x["pairs"] = round(x["pairs"], 2)
+                x["total"] = round(x["total"], 2)
+        return 200, {"items": items, "colors": colors}
+
+    def collections(q, user):
+        today = datetime.now().date()
+        conn = get_db()
+        out = []
+        for p in conn.execute("SELECT * FROM customers WHERE kind='customer' ORDER BY name"):
+            invs = rows(conn.execute(
+                "SELECT * FROM invoices WHERE customer_id=? AND kind='sale' ORDER BY date, id", (p["id"],)))
+            credit = (p["opening"] or 0)
+            for r in conn.execute("SELECT * FROM invoices WHERE customer_id=? AND kind='return'", (p["id"],)):
+                credit -= invoice_net(r["id"], conn)
+            for pm in conn.execute("SELECT * FROM payments WHERE customer_id=?", (p["id"],)):
+                credit -= (pm["cash"] or 0) + (pm["card"] or 0) + (pm["transfer"] or 0) + (pm["cheque"] or 0) + (pm["vcash"] or 0)
+            paid = -credit if credit < 0 else 0.0
+            total_remaining = credit if credit > 0 else 0.0
+            oldest = ""
+            for inv in invs:
+                net = invoice_net(inv["id"], conn)
+                remaining = net
+                if paid > 0:
+                    use = min(paid, remaining)
+                    remaining -= use
+                    paid -= use
+                if remaining > 0.005:
+                    total_remaining += remaining
+                    if not oldest:
+                        oldest = inv["date"]
+            if total_remaining <= 0.005:
+                continue
+            lp = conn.execute("SELECT MAX(date) d FROM payments WHERE customer_id=?",
+                              (p["id"],)).fetchone()["d"] or ""
+            days = 0
+            if oldest:
+                try:
+                    days = (today - datetime.strptime(oldest, "%Y-%m-%d").date()).days
+                except ValueError:
+                    days = 0
+            out.append({"id": p["id"], "name": p["name"], "phone": p["phone"] or "",
+                        "balance": round(total_remaining, 2), "oldest_date": oldest,
+                        "days": days, "last_payment": lp})
+        conn.close()
+        out.sort(key=lambda x: -x["balance"])
+        return 200, out
+
+    def monthly_report(q, user):
+        month = q.get("month", [""])[0]
+        if len(month) != 7:
+            return 400, {"error": "اختر الشهر"}
+        code, prof = API.profit({"month": [month]}, user)
+        if code != 200:
+            return code, prof
+        like = month + "%"
+        conn = get_db()
+        purchases = purchase_returns = 0.0
+        for r in conn.execute("SELECT id, kind FROM invoices WHERE date LIKE ?", (like,)):
+            net = invoice_net(r["id"], conn)
+            if r["kind"] == "purchase":
+                purchases += net
+            elif r["kind"] == "purchase_return":
+                purchase_returns += net
+        closed = month in closed_months_list(conn)
+        inv_count = conn.execute("SELECT COUNT(*) c FROM invoices WHERE date LIKE ?", (like,)).fetchone()["c"]
+        conn.close()
+        prof.update({"month": month, "closed": closed, "invoice_count": inv_count,
+                     "purchases": round(purchases, 2),
+                     "purchase_returns": round(purchase_returns, 2),
+                     "net_purchases": round(purchases - purchase_returns, 2)})
+        return 200, prof
+
+    def monthly_close(body, user):
+        m = (body.get("month") or "").strip()
+        if len(m) != 7:
+            return 400, {"error": "اختر الشهر"}
+        conn = get_db()
+        lst = closed_months_list(conn)
+        if m not in lst:
+            lst.append(m)
+            set_closed_months(conn, lst)
+            log_action(conn, user, "تقفيل شهر", m)
+            conn.commit()
+        conn.close()
+        return 200, {"ok": True}
+
+    def monthly_open(body, user):
+        m = (body.get("month") or "").strip()
+        conn = get_db()
+        lst = closed_months_list(conn)
+        if m in lst:
+            lst.remove(m)
+            set_closed_months(conn, lst)
+            log_action(conn, user, "فتح شهر", m)
+            conn.commit()
+        conn.close()
+        return 200, {"ok": True}
+
     def list_prices(q, user):
         cid = q.get("customer_id", [""])[0]
         if not cid:
@@ -2191,6 +2384,8 @@ ROUTES_POST = {
     "/api/treasury": (lambda b, u: API.create_treasury(b, u), False),
     "/api/prices": (lambda b, u: API.save_price(b, u), False),
     "/api/items": (lambda b, u: API.save_item(b, u), False),
+    "/api/monthly-close": (lambda b, u: API.monthly_close(b, u), True),
+    "/api/monthly-open": (lambda b, u: API.monthly_open(b, u), True),
     "/api/sync/pull": (lambda b, u: API.sync_pull(b, u), True),
 }
 ROUTES_GET = {
@@ -2211,8 +2406,11 @@ ROUTES_GET = {
     "/api/activity": (API.list_activity, True),
     "/api/prices": (API.list_prices, False),
     "/api/item-names": (API.list_item_names, False),
+    "/api/top-items": (API.top_items, False),
+    "/api/collections": (API.collections, False),
+    "/api/monthly-report": (API.monthly_report, True),
     "/api/items": (API.list_items, False),
-    "/api/profit": (API.profit, False),
+    "/api/profit": (API.profit, True),
     "/api/users": (API.list_users, True),
     "/api/check-update": (API.check_update, False),
 }
@@ -2299,6 +2497,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(*API.cheque_history(int(path.split("/")[3]), user))
             if path.startswith("/api/invoices/"):
                 return self._send(*API.get_invoice(int(path.rsplit("/", 1)[1]), user))
+            if path.startswith("/api/payments/"):
+                return self._send(*API.get_payment(int(path.rsplit("/", 1)[1]), user))
             self._send(404, {"error": "not found"})
         except Exception as e:
             self._send(500, {"error": str(e)})
