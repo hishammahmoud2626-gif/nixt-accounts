@@ -69,6 +69,14 @@
   .login-card input{width:100%;margin-bottom:10px;border:2px solid #6b7280;color:#111827;background:#fff}
   .login-card input::placeholder{color:#4b5563;opacity:1}
   .login-card button{width:100%}
+  .user-pick{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin-bottom:12px}
+  .user-chip{display:flex;flex-direction:column;align-items:center;gap:4px;width:92px;padding:10px 4px;border:2px solid #d1d5db;border-radius:10px;background:#fff;cursor:pointer}
+  .user-chip:hover{border-color:#6b7280}
+  .user-chip.sel{border-color:#111827;background:#f3f4f6}
+  .user-chip .avatar{width:42px;height:42px;border-radius:50%;background:#111827;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:16px}
+  .user-chip .uname{font-size:13px;font-weight:600;color:#111827;word-break:break-all}
+  .user-chip .urole{font-size:11px;color:#6b7280}
+  .link-btn{background:none;border:none;color:#1d4ed8;cursor:pointer;font-size:13px;text-decoration:underline;width:auto!important;margin-top:6px}
   .alert-list{margin:0;padding:0;list-style:none}
   .alert-list li{padding:6px 4px;border-bottom:1px solid var(--line);font-size:14px}
   /* print */
@@ -102,9 +110,12 @@
       <button onclick="doSetup()">إنشاء ودخول</button>
     </div>
     <div id="login-form" class="hidden">
+      <div id="login-users" class="user-pick hidden"></div>
+      <div id="li-picked" class="hidden" style="margin-bottom:10px;font-size:14px;font-weight:600"></div>
       <input id="li-username" placeholder="اسم المستخدم" autocomplete="off">
       <input id="li-password" type="password" placeholder="كلمة السر" onkeydown="if(event.key==='Enter')doLogin()">
       <button onclick="doLogin()">دخول</button>
+      <button id="li-other" class="link-btn hidden" onclick="pickUser(null)">دخول باسم مستخدم تاني</button>
     </div>
     <div id="login-err" class="bad" style="margin-top:8px;font-size:13px"></div>
   </div>
@@ -393,6 +404,9 @@
       </div>
       <table id="users-table"><thead><tr><th>المستخدم</th><th>الصلاحية</th><th></th></tr></thead><tbody></tbody></table>
       <p class="muted">المستخدم: شغل يومي كامل بدون حذف أو إعدادات أو استيراد. المدير: كل شيء. لو نسيت كلمات السر كلها شغّل ملف "استعادة-الدخول.bat".</p>
+      <div class="row" style="margin-top:8px">
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="set-login-users" style="width:auto"> إظهار قائمة المستخدمين في شاشة الدخول (اختيار بالضغط بدل كتابة الاسم)</label>
+      </div>
     </div>
     <div class="panel">
       <h2>تغيير كلمة السر بتاعتي</h2>
@@ -473,6 +487,7 @@ async function bootAuth(){
   }
   if(!me.logged_in){
     document.getElementById('login-form').classList.remove('hidden');
+    loadLoginUsers();
     return;
   }
   currentUser = {username:me.username, role:me.role};
@@ -485,6 +500,41 @@ async function doSetup(){
     const r=await api('/api/setup',{method:'POST',body:JSON.stringify({username:u,password:p1})});
     currentUser={username:u,role:'admin'}; showApp(); bootData();
   }catch(e){ document.getElementById('login-err').textContent=e.message; }
+}
+async function loadLoginUsers(){
+  try{
+    const users = await api('/api/login_users');
+    const box = document.getElementById('login-users');
+    if(!users || !users.length){ return; }
+    box.innerHTML='';
+    users.forEach(u=>{
+      const d=document.createElement('div');
+      d.className='user-chip';
+      d.innerHTML='<div class="avatar">'+esc(u.initials)+'</div><div class="uname">'+esc(u.username)+'</div><div class="urole">'+(u.role==='admin'?'مدير':'مستخدم')+'</div>';
+      d.onclick=()=>pickUser(u.username, d);
+      box.appendChild(d);
+    });
+    box.classList.remove('hidden');
+    document.getElementById('li-username').classList.add('hidden');
+    document.getElementById('li-other').classList.remove('hidden');
+  }catch(e){ /* keep manual form */ }
+}
+function pickUser(name, el){
+  document.querySelectorAll('.user-chip').forEach(c=>c.classList.remove('sel'));
+  const un=document.getElementById('li-username'), pk=document.getElementById('li-picked');
+  if(name){
+    el.classList.add('sel');
+    un.value=name; un.classList.add('hidden');
+    pk.textContent=name; pk.classList.remove('hidden');
+    document.getElementById('li-password').focus();
+  }else{
+    un.value=''; un.classList.remove('hidden');
+    pk.classList.add('hidden');
+    document.getElementById('login-users').classList.add('hidden');
+    document.getElementById('li-other').classList.add('hidden');
+    un.focus();
+  }
+  document.getElementById('login-err').textContent='';
 }
 async function doLogin(){
   try{
@@ -938,13 +988,14 @@ async function loadSettings(){
   document.getElementById('set-alert-days').value=s.alert_days||30;
   document.getElementById('set-backup-dir').value=s.backup_dir||'';
   document.getElementById('set-backup-info').textContent='النسخ الاحتياطي الآن يذهب إلى: '+s.backup_dir_effective;
+  document.getElementById('set-login-users').checked = (s.login_show_users!=='0');
   loadUsers();
 }
 async function saveSettings(){
   try{
     await api('/api/settings',{method:'POST',body:JSON.stringify({
       company_name:v('set-name'),company_phone:v('set-phone'),company_address:v('set-address'),
-      alert_days:v('set-alert-days')||'30',backup_dir:v('set-backup-dir')})});
+      alert_days:v('set-alert-days')||'30',backup_dir:v('set-backup-dir'),login_show_users:document.getElementById('set-login-users').checked?'1':'0'})});
     toast('تم حفظ الإعدادات'); loadSettings();
   }catch(e){toast(e.message,true);}
 }
@@ -1012,12 +1063,12 @@ async function openUpdate(){
   }catch(e){ document.getElementById('update-status').textContent='تعذر الفحص: '+e.message; }
 }
 async function runUpdate(){
-  document.getElementById('update-status').textContent='جارٍ التحميل والتثبيت... لا تغلق البرنامج.';
+  document.getElementById('update-status').textContent='جارٍ عمل نسخة احتياطية وتحميل التحديث وتثبيته... لا تغلق البرنامج.';
   document.getElementById('update-btn').classList.add('hidden');
   try{
     const r=await api('/api/do-update',{method:'POST',body:'{}'});
     document.getElementById('update-status').innerHTML=
-      'تم التثبيت. سيغلق البرنامج الآن وتُفتح النسخة الجديدة تلقائياً.<br>النسخة الجديدة في: <span class="num">'+esc(r.new_folder)+'</span>';
+      'تم التثبيت. البرنامج هيتقفل ويفتح لوحده على النسخة الجديدة - بياناتك محفوظة واتعمل لها نسخة احتياطية قبل التحديث.';
   }catch(e){ document.getElementById('update-status').textContent='فشل التحديث: '+e.message; }
 }
 function closeUpdate(){ document.getElementById('update-modal').style.display='none'; }
