@@ -1,5 +1,5 @@
 {
-  "version": "1.7.1",
-  "zip_url": "https://github.com/hishammahmoud2626-gif/nixt-accounts/releases/download/v1.7.1/NixtAccounts-1.7.1-Portable.zip",
-  "notes": "إصلاح شاشة الدخول (رسالة الخطأ الحقيقية + رقم الإصدار ظاهر)، تحديثات تُثبَّت في نفس الفولدر فلا يتكسر الاختصار، تنظيف فولدرات الإصدارات القديمة تلقائيا، وإصلاح ملف استعادة الدخول."
+  "version": "1.8.0",
+  "zip_url": "https://github.com/hishammahmoud2626-gif/nixt-accounts/releases/download/v1.8.0/NixtAccounts-1.8.0-Portable.zip",
+  "notes": "قفل الأجهزة (جهاز واحد يعدّل والتاني يتحذّر)، مزامنة تلقائية عند الفتح والقفل، ودمج على مستوى السجل - الأحدث يكسب والمحذوف يفضل محذوف، مع نسخة احتياطية قبل كل دمج."
 }
