@@ -130,6 +130,7 @@
       <button id="li-other" class="link-btn hidden" onclick="pickUser(null)">دخول باسم مستخدم تاني</button>
     </div>
     <div id="login-err" class="bad" style="margin-top:8px;font-size:13px"></div>
+    <div class="muted" style="margin-top:10px;font-size:12px" id="login-ver"></div>
   </div>
 </div>
 
@@ -944,7 +945,12 @@ function toast(msg, bad){
 }
 async function api(path, opts){
   const r = await fetch(path, opts);
-  if(r.status===401){ showLogin(); throw new Error('login'); }
+  if(r.status===401){
+    let msg='login';
+    try{ const j=await r.clone().json(); if(j && j.error) msg=j.error; }catch(_){}
+    if(currentUser){ showLogin(); throw new Error('login'); }
+    throw new Error(msg);
+  }
   const j = await r.json();
   if(!r.ok){ throw new Error(j.error||'خطأ'); }
   return j;
@@ -983,6 +989,7 @@ function showApp(){
 async function bootAuth(){
   const me = await api('/api/me');
   document.getElementById('app-ver').textContent='إصدار '+me.version;
+  document.getElementById('login-ver').textContent='إصدار '+me.version;
   if(me.needs_setup){
     document.getElementById('setup-form').classList.remove('hidden');
     return;
