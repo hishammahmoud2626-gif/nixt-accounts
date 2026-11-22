@@ -31,7 +31,7 @@ from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-APP_VERSION = "1.7.0"
+APP_VERSION = "1.7.1"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -1458,11 +1458,10 @@ class API:
         req = urllib.request.Request(zip_url, headers={"User-Agent": "NixtAccounts/" + APP_VERSION})
         with urllib.request.urlopen(req, timeout=120) as r, open(zip_path, "wb") as f:
             shutil.copyfileobj(r, f)
-        parent = os.path.dirname(BASE_DIR.rstrip(os.sep)) or BASE_DIR
-        target = os.path.join(parent, "NixtAccounts-%s" % latest)
-        if os.path.exists(target):
-            shutil.rmtree(target, ignore_errors=True)
-        os.makedirs(target, exist_ok=True)
+        staging = os.path.join(UPDATES_DIR, "extract-%s" % latest)
+        if os.path.exists(staging):
+            shutil.rmtree(staging, ignore_errors=True)
+        os.makedirs(staging, exist_ok=True)
         with zipfile.ZipFile(zip_path) as z:
             names = z.namelist()
             top = names[0].split("/")[0] if names else ""
@@ -1474,31 +1473,29 @@ class API:
                 low = rel.replace("\\", "/").lower()
                 if low.startswith("data/") or low.startswith("backups/") or low == "data" or low == "backups":
                     continue
-                dest = os.path.join(target, rel.replace("/", os.sep))
+                dest = os.path.join(staging, rel.replace("/", os.sep))
                 os.makedirs(os.path.dirname(dest), exist_ok=True)
                 with z.open(n) as srcf, open(dest, "wb") as outf:
                     shutil.copyfileobj(srcf, outf)
-        for folder in ("data", "backups"):
-            src_d = os.path.join(BASE_DIR, folder)
-            dst_d = os.path.join(target, folder)
-            if os.path.isdir(src_d):
-                shutil.copytree(src_d, dst_d, dirs_exist_ok=True)
-        # handoff: start the new copy, clean stale pythonw, then retire this folder
+        # handoff: stop this server, copy the new files over THIS folder
+        # (the launch path never changes, so shortcuts keep working), restart.
         old_dir = BASE_DIR.rstrip(os.sep)
-        retired = os.path.join(parent, "_old-" + os.path.basename(old_dir))
-        bat = os.path.join(parent, "nixt-run-new.bat")
-        new_start = os.path.join(target, "START.bat")
+        bat = os.path.join(old_dir, "nixt-apply-update.bat")
+        new_start = os.path.join(old_dir, "START.bat")
+        bat_lines = [
+            '@echo off',
+            'cd /d "%TEMP%"',
+            'ping -n 5 127.0.0.1 >nul',
+            'taskkill /F /IM pythonw.exe >nul 2>&1',
+            'ping -n 2 127.0.0.1 >nul',
+            'xcopy /E /Y /Q "%s\\*" "%s\\" >nul' % (staging, old_dir),
+            'start "" "%s"' % new_start,
+            'ping -n 3 127.0.0.1 >nul',
+            'rmdir /s /q "%s" >nul 2>&1' % UPDATES_DIR,
+            'del "%~f0" >nul 2>&1',
+        ]
         with open(bat, "w") as f:
-            f.write('@echo off\r\n'
-                    'cd /d "%TEMP%"\r\n'
-                    'ping -n 5 127.0.0.1 >nul\r\n'
-                    'taskkill /F /IM pythonw.exe >nul 2>&1\r\n'
-                    'start "" "%s"\r\n'
-                    'ping -n 6 127.0.0.1 >nul\r\n'
-                    'if exist "%s" rmdir /s /q "%s" >nul 2>&1\r\n'
-                    'ren "%s" "%s" >nul 2>&1\r\n'
-                    'del "%%~f0" >nul 2>&1\r\n'
-                    % (new_start, retired, retired, old_dir, os.path.basename(retired)))
+            f.write("\r\n".join(bat_lines) + "\r\n")
 
         def _handoff():
             try:
@@ -1508,7 +1505,7 @@ class API:
             os._exit(0)
 
         threading.Timer(1.0, _handoff).start()
-        return 200, {"ok": True, "new_folder": target, "version": latest}
+        return 200, {"ok": True, "new_folder": BASE_DIR, "version": latest}
 
     def wipe(body, user):
         if (body.get("confirm") or "").strip() != "تصفير":
@@ -2969,8 +2966,48 @@ def kill_stale_server():
     return not port_busy()
 
 
+def cleanup_old_installs():
+    """Delete sibling folders left by pre-1.7.1 updaters (NixtAccounts-x.y.z,
+    _old-NixtAccounts*) and the stale handoff script. Keeps this folder and
+    the newest other copy as a fallback, and never touches a folder that
+    still holds a database."""
+    import re
+    try:
+        parent = os.path.dirname(BASE_DIR.rstrip(os.sep)) or BASE_DIR
+        me = os.path.normpath(BASE_DIR)
+        cands = []
+        for name in os.listdir(parent):
+            low = name.lower()
+            if not (re.fullmatch(r"nixtaccounts-\d+\.\d+\.\d+", low)
+                    or low.startswith("_old-nixt")):
+                continue
+            p = os.path.normpath(os.path.join(parent, name))
+            if p == me or not os.path.isdir(p):
+                continue
+            if os.path.isfile(os.path.join(p, "data", "nixt.db")):
+                continue
+            cands.append(p)
+
+        def ver_key(p):
+            m = re.search(r"(\d+)\.(\d+)\.(\d+)", os.path.basename(p))
+            return tuple(int(x) for x in m.groups()) if m else (0, 0, 0)
+
+        cands.sort(key=ver_key, reverse=True)
+        for p in cands[1:]:
+            shutil.rmtree(p, ignore_errors=True)
+        stale = os.path.join(parent, "nixt-run-new.bat")
+        if os.path.isfile(stale):
+            try:
+                os.remove(stale)
+            except OSError:
+                pass
+    except Exception:
+        pass
+
+
 def main():
     init_db()
+    cleanup_old_installs()
     if port_busy():
         ver = running_server_version()
         if ver == APP_VERSION and server_serves_index():
