@@ -31,7 +31,12 @@ from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-APP_VERSION = "2.0.0"
+try:
+    import drive_sync
+except Exception:
+    drive_sync = None
+
+APP_VERSION = "2.1.0"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -324,8 +329,19 @@ def now_str():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+class _NixtConn(sqlite3.Connection):
+    """Main-DB connection: every commit flags the Drive snapshot as stale."""
+    def commit(self):
+        super().commit()
+        if drive_sync is not None:
+            try:
+                drive_sync.mark_dirty()
+            except Exception:
+                pass
+
+
 def get_db():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, factory=_NixtConn)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
@@ -1367,8 +1383,10 @@ class API:
         conn = get_db()
         name = get_setting(conn, "company_name", "NIXT FOR LEATHER")
         conn.close()
+        drv = bool(drive_sync is not None and drive_sync.connected())
         return 200, {"company_name": name, "version": APP_VERSION,
-                     "view_only": (user or {}).get("role") == "view"}
+                     "view_only": (user or {}).get("role") == "view",
+                     "drive_connected": drv}
 
     def mobile_config(q, user):
         return 200, mobile_config_payload()
@@ -1387,6 +1405,33 @@ class API:
         conn.commit()
         conn.close()
         return 200, mobile_config_payload()
+
+    # ---------- drive sync ----------
+    def drive_status(q, user):
+        if drive_sync is None:
+            return 200, {"configured": False, "connected": False}
+        return 200, drive_sync.status()
+
+    def drive_connect(body, user):
+        if drive_sync is None or not drive_sync.configured():
+            return 400, {"error": "الربط غير معد في هذي النسخة"}
+        url, _st = drive_sync.begin_auth(drive_redirect_uri())
+        try:
+            webbrowser.open(url)
+        except Exception:
+            pass
+        return 200, {"ok": True, "url": url}
+
+    def drive_disconnect(body, user):
+        if drive_sync is not None:
+            drive_sync.disconnect()
+        return 200, {"ok": True}
+
+    def drive_upload_now(body, user):
+        if drive_sync is None or not drive_sync.connected():
+            return 400, {"error": "جوجل درايف غير مربوط"}
+        ok = drive_sync.upload_now(build_snapshot_bytes())
+        return (200 if ok else 500), {"ok": ok, "status": drive_sync.status()}
 
     # ---------- parties (customers & suppliers) ----------
     def list_customers(q, user):
@@ -3106,6 +3151,53 @@ def api_import_medo_full(body, user):
                  "mismatched": len(mismatched), "mismatch_list": mismatched[:30]}
 
 
+# ---------------- drive snapshot (phase 1: PC -> Drive view-only) ----------------
+
+def build_snapshot_bytes():
+    fake_admin = {"role": "admin", "name": ""}
+    parts = {}
+    for key, fn in (("bootstrap", API.mobile_bootstrap),
+                    ("dashboard", API.dashboard),
+                    ("customers", API.list_customers),
+                    ("invoices", API.list_invoices),
+                    ("today", API.today)):
+        try:
+            _st, obj = fn({}, fake_admin)
+            parts[key] = obj
+        except Exception as e:
+            parts[key] = {"error": str(e)[:120]}
+    parts["snapshot_ts"] = now_str()
+    parts["version"] = APP_VERSION
+    return json.dumps(parts, ensure_ascii=False, default=str).encode("utf-8")
+
+
+def drive_redirect_uri():
+    return "http://127.0.0.1:%d/api/drive/callback" % PORT
+
+
+def drive_callback_html(q):
+    err = (q.get("error") or [""])[0]
+    code = (q.get("code") or [""])[0]
+    state = (q.get("state") or [""])[0]
+    if drive_sync is None:
+        ok, msg = False, "الوحدة غير متاحة"
+    elif err:
+        ok, msg = False, "اترفض الإذن من جوجل"
+    elif not code:
+        ok, msg = False, "لم يصل رمز التفويض"
+    else:
+        ok, msg = drive_sync.finish_auth(code, state, drive_redirect_uri())
+        if ok:
+            msg = "تم ربط جوجل درايف بنجاح. اقفل الصفحة دي وارجع للبرنامج."
+        else:
+            msg = "فشل الربط: " + msg
+    color = "#166534" if ok else "#b91c1c"
+    body = "<div style='font-family:sans-serif;direction:rtl;text-align:center;margin-top:80px'>"
+    body += "<h2 style='color:%s'>%s</h2></div>" % (color, msg)
+    return ("<!DOCTYPE html><html lang=ar dir=rtl><head><meta charset=utf-8>"
+            "<title>ربط جوجل درايف</title></head><body>" + body + "</body></html>")
+
+
 # ---------------- routes ----------------
 # path -> (handler, needs_admin)
 ROUTES_POST = {
@@ -3124,6 +3216,9 @@ ROUTES_POST = {
     "/api/do-update": (lambda b, u: API.do_update(b, u), True),
     "/api/wipe": (lambda b, u: API.wipe(b, u), True),
     "/api/sync/push": (lambda b, u: API.sync_push(b, u), True),
+    "/api/drive/connect": (lambda b, u: API.drive_connect(b, u), True),
+    "/api/drive/disconnect": (lambda b, u: API.drive_disconnect(b, u), True),
+    "/api/drive/upload-now": (lambda b, u: API.drive_upload_now(b, u), True),
     "/api/treasury": (lambda b, u: API.create_treasury(b, u), False),
     "/api/prices": (lambda b, u: API.save_price(b, u), False),
     "/api/items": (lambda b, u: API.save_item(b, u), False),
@@ -3159,6 +3254,7 @@ ROUTES_GET = {
     "/api/quotations": (API.list_quotations, False),
     "/api/mobile/bootstrap": (API.mobile_bootstrap, False),
     "/api/mobile/config": (API.mobile_config, True),
+    "/api/drive/status": (API.drive_status, True),
     "/api/backups": (API.list_backups, True),
     "/api/collections": (API.collections, False),
     "/api/monthly-report": (API.monthly_report, True),
@@ -3171,7 +3267,7 @@ ROUTES_GET = {
 STATIC_TYPES = {".html": "text/html; charset=utf-8", ".png": "image/png",
                 ".jpg": "image/jpeg", ".ico": "image/x-icon", ".css": "text/css",
                 ".js": "application/javascript"}
-OPEN_PATHS = {"/api/login", "/api/setup", "/api/me", "/api/version", "/api/login_users"}
+OPEN_PATHS = {"/api/login", "/api/setup", "/api/me", "/api/version", "/api/login_users", "/api/drive/callback"}
 VIEW_GET_PATHS = {"/api/me", "/api/dashboard", "/api/customers", "/api/invoices",
                   "/api/today", "/api/version", "/api/mobile/bootstrap"}
 
@@ -3199,6 +3295,15 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(data)))
         for k, v in (extra_headers or {}).items():
             self.send_header(k, v)
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _send_html(self, html):
+        data = html.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
 
@@ -3277,6 +3382,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send_file(fp, STATIC_TYPES[ext])
                 return self._send(404, {"error": "not found"})
             user = self._user()
+            if path == "/api/drive/callback":
+                return self._send_html(drive_callback_html(q))
             if path in OPEN_PATHS:
                 if path in ROUTES_GET:
                     fn, _adm = ROUTES_GET[path]
@@ -3572,6 +3679,12 @@ def main():
             return
     auto_backup_tick()
     threading.Thread(target=auto_backup_loop, daemon=True).start()
+    if drive_sync is not None:
+        try:
+            drive_sync.init(DATA_DIR)
+            drive_sync.start_worker(build_snapshot_bytes)
+        except Exception:
+            pass
     sync_on_startup()
     global MOBILE_BOUND
     _c = get_db()
