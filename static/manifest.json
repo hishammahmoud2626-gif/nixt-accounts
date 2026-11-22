@@ -1,0 +1,17 @@
+{
+  "name": "نيكست للحسابات",
+  "short_name": "نيكست",
+  "description": "متابعة أرصدة وفواتير نيكست من الموبايل (عرض فقط)",
+  "lang": "ar",
+  "dir": "rtl",
+  "start_url": "/mobile",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#121110",
+  "theme_color": "#141312",
+  "icons": [
+    {"src": "/static/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+    {"src": "/static/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"}
+  ]
+}
