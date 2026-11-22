@@ -20,6 +20,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
 import urllib.request
 import webbrowser
 import zipfile
@@ -28,7 +29,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-APP_VERSION = "1.1.1"
+APP_VERSION = "1.1.2"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
@@ -56,13 +57,61 @@ def version_tuple(v):
         return (0,)
 
 
-def fetch_update_info():
-    url = read_update_url()
-    if not url:
-        return None
-    req = urllib.request.Request(url, headers={"User-Agent": "NixtAccounts/" + APP_VERSION})
-    with urllib.request.urlopen(req, timeout=10) as r:
+UPDATE_FALLBACK_URL = "https://api.github.com/repos/hishammahmoud2626-gif/nixt-accounts/releases/latest"
+
+UPDATE_ERROR_KIND = {"noinet": "لا يوجد اتصال بالإنترنت حالياً",
+                     "cert": "مشكلة في شهادات الأمان (SSL) على الجهاز",
+                     "http": "خادم التحديثات رد برد غير متوقع",
+                     "bad": "رد غير مفهوم من خادم التحديثات"}
+
+
+def classify_net_error(e):
+    import ssl as _ssl
+    s = str(e)
+    if isinstance(e, _ssl.SSLError) or "CERTIFICATE_VERIFY_FAILED" in s.upper():
+        return "cert"
+    if isinstance(e, urllib.error.HTTPError):
+        return "http"
+    return "noinet"
+
+
+def _fetch_json(url, timeout=10):
+    req = urllib.request.Request(url, headers={"User-Agent": "NixtAccounts/" + APP_VERSION,
+                                               "Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read().decode("utf-8"))
+
+
+def fetch_update_info():
+    """Returns (info, error_kind, error_text). info is None on failure.
+    Tries the configured version.json URL first, then the GitHub latest-release API."""
+    url = read_update_url()
+    errors = []
+    if url:
+        try:
+            info = _fetch_json(url)
+            if info.get("version"):
+                return info, None, ""
+            errors.append(("bad", "version.json missing version field"))
+        except Exception as e:
+            errors.append((classify_net_error(e), "%s: %s" % (type(e).__name__, e)))
+    try:
+        rel = _fetch_json(UPDATE_FALLBACK_URL)
+        zip_url = ""
+        for a in rel.get("assets", []):
+            if a.get("name", "").endswith("Portable.zip"):
+                zip_url = a.get("browser_download_url", "")
+                break
+        info = {"version": str(rel.get("tag_name", "")).lstrip("vV"),
+                "zip_url": zip_url, "notes": (rel.get("body") or "")[:300]}
+        if info["version"]:
+            return info, None, ""
+        errors.append(("bad", "github latest release missing tag_name"))
+    except Exception as e:
+        errors.append((classify_net_error(e), "%s: %s" % (type(e).__name__, e)))
+    kind = errors[0][0] if errors else "noinet"
+    detail = " | ".join("%s [%s]" % (t, k) for k, t in errors)[:300]
+    return None, kind, detail
 
 
 SCHEMA = """
@@ -102,6 +151,16 @@ CREATE TABLE IF NOT EXISTS payments (
   card REAL DEFAULT 0,
   transfer REAL DEFAULT 0,
   notes TEXT DEFAULT '',
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS employees (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  role TEXT DEFAULT '',
+  phone TEXT DEFAULT '',
+  start_date TEXT DEFAULT '',
+  notes TEXT DEFAULT '',
+  active INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS users (
@@ -475,6 +534,34 @@ class API:
         conn.close()
         return 200, {"id": cid}
 
+    def list_employees(q, user):
+        conn = get_db()
+        out = rows(conn.execute("SELECT * FROM employees ORDER BY name"))
+        conn.close()
+        return 200, out
+
+    def create_employee(body, user):
+        name = (body.get("name") or "").strip()
+        if not name:
+            return 400, {"error": "الاسم مطلوب"}
+        conn = get_db()
+        cur = conn.execute(
+            "INSERT INTO employees (name, role, phone, start_date, notes, active, created_at)"
+            " VALUES (?,?,?,?,?,1,?)",
+            (name, body.get("role", ""), body.get("phone", ""),
+             body.get("start_date", ""), body.get("notes", ""), now_str()))
+        conn.commit()
+        eid = cur.lastrowid
+        conn.close()
+        return 200, {"id": eid}
+
+    def toggle_employee(eid, user):
+        conn = get_db()
+        conn.execute("UPDATE employees SET active = 1 - active WHERE id=?", (eid,))
+        conn.commit()
+        conn.close()
+        return 200, {"ok": True}
+
     def update_customer(cid, body, user):
         conn = get_db()
         conn.execute(
@@ -788,17 +875,20 @@ class API:
     def check_update(q, user):
         if not read_update_url():
             return 200, {"configured": False}
-        try:
-            info = fetch_update_info()
-        except Exception as e:
-            return 200, {"configured": True, "online": False, "error": str(e), "current": APP_VERSION}
+        info, kind, detail = fetch_update_info()
+        if info is None:
+            return 200, {"configured": True, "online": False, "error": detail,
+                         "message": UPDATE_ERROR_KIND.get(kind, UPDATE_ERROR_KIND["noinet"]),
+                         "current": APP_VERSION}
         latest = str(info.get("version", ""))
         return 200, {"configured": True, "online": True, "current": APP_VERSION, "latest": latest,
                      "update_available": version_tuple(latest) > version_tuple(APP_VERSION),
                      "notes": info.get("notes", ""), "has_zip": bool(info.get("zip_url"))}
 
     def do_update(body, user):
-        info = fetch_update_info()
+        info, kind, detail = fetch_update_info()
+        if info is None:
+            return 400, {"error": UPDATE_ERROR_KIND.get(kind, "تعذر الاتصال بخادم التحديثات")}
         latest = str(info.get("version", ""))
         if not (version_tuple(latest) > version_tuple(APP_VERSION)):
             return 400, {"error": "no newer version"}
@@ -1108,9 +1198,9 @@ def api_import_medo_full(body, user):
     if st_rows:
         h2 = st_rows[0]
         si = {"code": _find_col(h2, "كود العميل", "الكود"), "name": _find_col(h2, "اسم العميل"),
-              "date": _find_col(h2, "التاريخ"), "type": _find_col(h2, "النوع"),
-              "product": _find_col(h2, "المنتج"), "pairs": _find_col(h2, "أزواج"),
-              "debit": _find_col(h2, "عليه"), "credit": _find_col(h2, "له")}
+              "date": _find_col(h2, "التاريخ"), "type": _find_col(h2, "النوع", "نوع الحركة"),
+              "product": _find_col(h2, "المنتج", "البيان"), "pairs": _find_col(h2, "أزواج"),
+              "debit": _find_col(h2, "عليه", "مدين"), "credit": _find_col(h2, "له", "دائن")}
         for r in st_rows[1:]:
             def g2(k):
                 i = si[k]
@@ -1203,6 +1293,7 @@ ROUTES_POST = {
     "/api/logout": (lambda b, u: API.logout(b, u), False),
     "/api/change-password": (lambda b, u: API.change_password(b, u), False),
     "/api/customers": (lambda b, u: API.create_customer(b, u), False),
+    "/api/employees": (lambda b, u: API.create_employee(b, u), False),
     "/api/invoices": (lambda b, u: API.create_invoice(b, u), False),
     "/api/payments": (lambda b, u: API.create_payment(b, u), False),
     "/api/backup": (lambda b, u: API.backup({}, u), False),
@@ -1217,6 +1308,7 @@ ROUTES_GET = {
     "/api/me": (API.me, False),
     "/api/version": (lambda q, u: API.version(q), False),
     "/api/customers": (API.list_customers, False),
+    "/api/employees": (API.list_employees, False),
     "/api/invoices": (API.list_invoices, False),
     "/api/payments": (API.list_payments, False),
     "/api/statement": (API.statement, False),
@@ -1239,9 +1331,11 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def _send(self, status, obj, extra_headers=None):
+        LAST_ACTIVITY[0] = time.time()
         data = json.dumps(obj, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(data)))
         for k, v in (extra_headers or {}).items():
             self.send_header(k, v)
@@ -1249,10 +1343,12 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def _send_file(self, path, ctype):
+        LAST_ACTIVITY[0] = time.time()
         with open(path, "rb") as f:
             data = f.read()
         self.send_response(200)
         self.send_header("Content-Type", ctype)
+        self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
@@ -1336,6 +1432,8 @@ class Handler(BaseHTTPRequestHandler):
                 if adm and user["role"] != "admin":
                     return self._send(403, {"error": "admin_required"})
                 return self._send(*fn(body, user))
+            if path.startswith("/api/employees/") and path.endswith("/toggle"):
+                return self._send(*API.toggle_employee(int(path.split("/")[3]), user))
             if path.startswith("/api/customers/"):
                 return self._send(*API.update_customer(int(path.rsplit("/", 1)[1]), body, user))
             if path.startswith("/api/users/") and path.endswith("/reset"):
@@ -1382,12 +1480,54 @@ def port_busy():
         s.close()
 
 
+APP_WINDOW_BROWSERS = [
+    r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+    r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+]
+
+LAST_ACTIVITY = [0.0]
+
+
+def open_app_window():
+    """Open the app in a standalone browser window (no tabs/address bar).
+    Returns the process handle, or None to fall back to the default browser."""
+    url = "http://%s:%d/" % (HOST, PORT)
+    candidates = [c for c in APP_WINDOW_BROWSERS if os.path.exists(c)]
+    if not candidates:
+        for name in ("msedge.exe", "chrome.exe"):
+            found = shutil.which(name)
+            if found:
+                candidates.append(found)
+                break
+    if not candidates:
+        return None
+    try:
+        return subprocess.Popen([candidates[0], "--app=" + url])
+    except Exception:
+        return None
+
+
 def open_browser():
-    time.sleep(1.0)
     try:
         webbrowser.open("http://%s:%d/" % (HOST, PORT))
     except Exception:
         pass
+
+
+def watchdog_loop(server):
+    """Stop the server shortly after the last open window stops talking to us,
+    so closing the app window never leaves a zombie server behind."""
+    while True:
+        time.sleep(15)
+        last = LAST_ACTIVITY[0]
+        if last and time.time() - last > 180:
+            try:
+                server.shutdown()
+            except Exception:
+                pass
+            return
 
 
 def auto_backup_loop():
@@ -1396,15 +1536,69 @@ def auto_backup_loop():
         auto_backup_tick()
 
 
+def running_server_version():
+    try:
+        req = urllib.request.Request(
+            "http://%s:%d/api/version" % (HOST, PORT),
+            headers={"User-Agent": "NixtAccounts/" + APP_VERSION})
+        with urllib.request.urlopen(req, timeout=2) as r:
+            data = json.loads(r.read().decode("utf-8"))
+        return data.get("version") or ""
+    except Exception:
+        return None
+
+
+def server_serves_index():
+    try:
+        with urllib.request.urlopen("http://%s:%d/" % (HOST, PORT), timeout=2) as r:
+            html = r.read().decode("utf-8", "ignore")
+        return "نيكست" in html or "nixt" in html.lower()
+    except Exception:
+        return False
+
+
+def show_message(text):
+    try:
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(0, text, "نظام نيكست للحسابات", 0x40)
+    except Exception:
+        pass
+
+
 def main():
     init_db()
     if port_busy():
-        webbrowser.open("http://%s:%d/" % (HOST, PORT))
+        ver = running_server_version()
+        if ver == APP_VERSION and server_serves_index():
+            if open_app_window() is None:
+                open_browser()
+        elif ver and ver != APP_VERSION:
+            show_message(
+                "فيه نسخة أقدم من البرنامج (إصدار " + ver + ") لسه شغالة في الخلفية.\n\n"
+                + "افتح Task Manager بـ Ctrl+Shift+Esc واعمل End task لـ pythonw.exe، "
+                + "أو اعمل Restart للجهاز، وبعدين شغّل البرنامج تاني.")
+        else:
+            show_message(
+                "فيه نسخة قديمة من البرنامج معلّقة أو برنامج تاني مسك منفذ التشغيل.\n\n"
+                + "اعمل Restart للجهاز وبعدين شغّل البرنامج تاني.")
         return
     auto_backup_tick()
-    threading.Thread(target=open_browser, daemon=True).start()
     threading.Thread(target=auto_backup_loop, daemon=True).start()
-    server = ThreadingHTTPServer((HOST, PORT), Handler)
+    try:
+        server = ThreadingHTTPServer((HOST, PORT), Handler)
+    except OSError:
+        show_message(
+            "البرنامج مش قادر يفتح منفذ التشغيل.\n\n"
+            + "اعمل Restart للجهاز وبعدين شغّل البرنامج تاني.")
+        return
+
+    def launch_window():
+        time.sleep(1.0)
+        if open_app_window() is None:
+            open_browser()
+
+    threading.Thread(target=launch_window, daemon=True).start()
+    threading.Thread(target=watchdog_loop, args=(server,), daemon=True).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
