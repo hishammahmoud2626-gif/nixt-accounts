@@ -3,7 +3,8 @@
 """
 Nixt Accounts - offline desktop accounts system (Arabic UI).
 Single-file stdlib server: http.server + sqlite3. No internet needed.
-Data lives in data/nixt.db next to this file. Backups in backups/.
+Data lives in a stable per-user folder (%APPDATA%/NixtAccounts on Windows),
+so updates never touch it. Backups live next to the database.
 """
 import base64
 import csv
@@ -30,11 +31,21 @@ from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-APP_VERSION = "1.5.0"
+APP_VERSION = "1.5.1"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(BASE_DIR, "data")
-BACKUP_DIR = os.path.join(BASE_DIR, "backups")
+
+
+def default_data_root():
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        return os.path.join(appdata, "NixtAccounts")
+    return os.path.join(os.path.expanduser("~"), ".nixt-accounts")
+
+
+DATA_ROOT = os.environ.get("NIXT_DATA_DIR", default_data_root())
+DATA_DIR = os.path.join(DATA_ROOT, "data")
+BACKUP_DIR = os.path.join(DATA_ROOT, "backups")
 DB_PATH = os.path.join(DATA_DIR, "nixt.db")
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 HOST = "127.0.0.1"
@@ -175,6 +186,14 @@ CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  code TEXT DEFAULT '',
+  retail_price REAL DEFAULT 0,
+  active INTEGER DEFAULT 1,
+  created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS ledger_entries (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
@@ -267,6 +286,8 @@ DEFAULT_SETTINGS = {
     "login_show_users": "1",
     "sync_dir": "",
     "device_name": "",
+    "wholesale_divisor": "1.22",
+    "colors": "أسود,بني,هافان,أبيض,كحلي,رمادي,تانجو",
 }
 
 INVOICE_KINDS = ("sale", "return", "purchase", "purchase_return")
@@ -287,6 +308,84 @@ def get_db():
     return conn
 
 
+def legacy_db_candidates():
+    """Old installs kept data inside the program folder. Collect every
+    data/nixt.db we can still find: this folder, and sibling folders from
+    previous versions / retired update folders."""
+    cands = []
+
+    def add(p):
+        p = os.path.normpath(p)
+        if os.path.isfile(p) and p not in cands:
+            cands.append(p)
+
+    add(os.path.join(BASE_DIR, "data", "nixt.db"))
+    parent = os.path.dirname(BASE_DIR.rstrip(os.sep)) or BASE_DIR
+    try:
+        names = sorted(os.listdir(parent))
+    except OSError:
+        names = []
+    for name in names:
+        low = name.lower()
+        if low.startswith("nixtaccounts") or low.startswith("_old-nixt"):
+            add(os.path.join(parent, name, "data", "nixt.db"))
+    return cands
+
+
+def db_data_score(path):
+    """Higher = more real business data. Used to pick the right legacy db."""
+    try:
+        conn = sqlite3.connect(path)
+    except sqlite3.Error:
+        return -1
+    score = 0
+    for t in ("customers", "suppliers", "invoices", "payments",
+              "treasury_movements", "cheques", "users"):
+        try:
+            score += conn.execute("SELECT COUNT(*) FROM %s" % t).fetchone()[0]
+        except sqlite3.Error:
+            pass
+    conn.close()
+    return score
+
+
+def migrate_legacy_data():
+    """First run from the new stable location: adopt the richest old
+    database found next to the program, plus its backups. Never runs when
+    a database already exists in the stable location."""
+    if os.path.exists(DB_PATH):
+        return None
+    best, best_key = None, (-1, 0)
+    for path in legacy_db_candidates():
+        score = db_data_score(path)
+        if score < 0:
+            continue
+        try:
+            key = (score, int(os.path.getmtime(path)))
+        except OSError:
+            continue
+        if key > best_key:
+            best, best_key = path, key
+    if not best:
+        return None
+    os.makedirs(DATA_DIR, exist_ok=True)
+    src = sqlite3.connect(best)
+    dst = sqlite3.connect(DB_PATH)
+    src.backup(dst)
+    dst.close()
+    src.close()
+    legacy_backups = os.path.join(os.path.dirname(os.path.dirname(best)), "backups")
+    if os.path.isdir(legacy_backups):
+        try:
+            shutil.copytree(legacy_backups, BACKUP_DIR, dirs_exist_ok=True)
+        except OSError:
+            pass
+    return best
+
+
+MIGRATED_FROM = migrate_legacy_data()
+
+
 def init_db():
     os.makedirs(DATA_DIR, exist_ok=True)
     os.makedirs(BACKUP_DIR, exist_ok=True)
@@ -298,6 +397,9 @@ def init_db():
             conn.execute(ddl)
     for k, v in DEFAULT_SETTINGS.items():
         conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?,?)", (k, v))
+    if MIGRATED_FROM:
+        conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?,?)",
+                     ("migrated_from", MIGRATED_FROM))
     conn.commit()
     conn.close()
 
@@ -537,9 +639,11 @@ def sync_status_payload():
     sdir = sync_dir(conn)
     last = get_setting(conn, "sync_last", "")
     dev = device_name(conn)
+    migrated = get_setting(conn, "migrated_from", "")
     conn.close()
     out = {"sync_dir": sdir, "device": dev, "last_sync": last,
-           "configured": bool(sdir)}
+           "configured": bool(sdir), "data_dir": DATA_DIR,
+           "migrated_from": migrated}
     if not sdir:
         out["state"] = "not_configured"
         return out
@@ -1627,6 +1731,45 @@ class API:
         conn.close()
         return 200, out
 
+    def list_items(q, user):
+        conn = get_db()
+        out = rows(conn.execute("SELECT * FROM items WHERE active=1 ORDER BY name"))
+        conn.close()
+        return 200, out
+
+    def save_item(body, user):
+        name = (body.get("name") or "").strip()
+        if not name:
+            return 400, {"error": "اسم الصنف مطلوب"}
+        try:
+            retail = float(body.get("retail_price") or 0)
+        except (TypeError, ValueError):
+            return 400, {"error": "سعر المستهلك غير صحيح"}
+        conn = get_db()
+        conn.execute(
+            "INSERT INTO items (name, code, retail_price, active, created_at) VALUES (?,?,?,1,?) "
+            "ON CONFLICT(name) DO UPDATE SET code=excluded.code, retail_price=excluded.retail_price",
+            (name, body.get("code", "") or "", retail, now_str()))
+        conn.commit()
+        iid = conn.execute("SELECT id FROM items WHERE name=?", (name,)).fetchone()["id"]
+        conn.close()
+        return 200, {"id": iid}
+
+    def list_item_names(q, user):
+        conn = get_db()
+        names = set()
+        for r in conn.execute("SELECT DISTINCT item_name FROM invoice_items"):
+            if r["item_name"]:
+                names.add(r["item_name"])
+        for r in conn.execute("SELECT DISTINCT item_name FROM customer_prices"):
+            if r["item_name"]:
+                names.add(r["item_name"])
+        for r in conn.execute("SELECT name FROM items WHERE active=1"):
+            if r["name"]:
+                names.add(r["name"])
+        conn.close()
+        return 200, sorted(names)
+
     def save_price(body, user):
         cid = body.get("customer_id")
         name = (body.get("item_name") or "").strip()
@@ -2047,6 +2190,7 @@ ROUTES_POST = {
     "/api/sync/push": (lambda b, u: API.sync_push(b, u), True),
     "/api/treasury": (lambda b, u: API.create_treasury(b, u), False),
     "/api/prices": (lambda b, u: API.save_price(b, u), False),
+    "/api/items": (lambda b, u: API.save_item(b, u), False),
     "/api/sync/pull": (lambda b, u: API.sync_pull(b, u), True),
 }
 ROUTES_GET = {
@@ -2066,6 +2210,8 @@ ROUTES_GET = {
     "/api/aging": (API.aging, False),
     "/api/activity": (API.list_activity, True),
     "/api/prices": (API.list_prices, False),
+    "/api/item-names": (API.list_item_names, False),
+    "/api/items": (API.list_items, False),
     "/api/profit": (API.profit, False),
     "/api/users": (API.list_users, True),
     "/api/check-update": (API.check_update, False),
