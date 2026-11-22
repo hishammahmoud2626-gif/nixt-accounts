@@ -2044,7 +2044,7 @@ async function printInvoice(id, mode){
        <div>إجمالي قيمة الفاتورة الصافية: <b class="num">${fmt(i.net)} ج.م</b></div></div>`;
   const charges = (i.shipping||i.other_charges||i.discount)
     ? `<div class="inv-charges">إجمالي الأصناف: <span class="num">${fmt(i.items_total)}</span>${i.shipping?' + شحن <span class="num">'+fmt(i.shipping)+'</span>':''}${i.other_charges?' + مصاريف أخرى <span class="num">'+fmt(i.other_charges)+'</span>':''}${i.discount?' − خصم <span class="num">'+fmt(i.discount)+'</span>':''}</div>` : '';
-  const qrText = `${i.company.company_name||'نيكست للجلديات'} | ${baseTitle} رقم ${i.number||('#'+i.id)} | التاريخ ${i.date} | ${partyLabel}: ${i.customer?i.customer.name:''} | الصافي ${fmt(i.net)} ج.م`;
+  const qrText = `${i.company.company_name||'NIXT FOR LEATHER'} | ${baseTitle} رقم ${i.number||('#'+i.id)} | التاريخ ${i.date} | ${partyLabel}: ${i.customer?i.customer.name:''} | الصافي ${fmt(i.net)} ج.م`;
   let qrSvg = '';
   try{
     const qr = qrcode(0,'M'); qr.addData(qrText); qr.make();
@@ -2867,7 +2867,7 @@ function statementPdfWhatsApp(){
   const phone=(c&&c.phone||'').replace(/[^0-9]/g,'');
   printStatement(false);
   if(phone){
-    const txt='كشف حسابكم من نيكست للجلديات - المتبقي: '+fmt(lastStatement.summary.remaining)+' جنيه. هنبعت الـ PDF في الرسالة الجاية.';
+    const txt='كشف حسابكم من NIXT FOR LEATHER - المتبقي: '+fmt(lastStatement.summary.remaining)+' جنيه. هنبعت الـ PDF في الرسالة الجاية.';
     setTimeout(()=>window.open('https://wa.me/'+phone+'?text='+encodeURIComponent(txt),'_blank'),400);
   }else{
     toast('الطرف ده مالوش رقم تليفون مسجل - اطبع الـ PDF وابعته يدويًا',true);
@@ -2916,7 +2916,7 @@ async function loadCollections(){
 function shareCollection(id){
   const c=(window._collections||[]).find(x=>x.id===id); if(!c) return;
   const phone=(c.phone||'').replace(/[^0-9]/g,'');
-  const txt='تحياتنا من نيكست للجلديات 🌹\nتذكير ودّي بالمديونية: المتبقي على حسابكم '+fmt(c.balance)+' جنيه.'
+  const txt='تحياتنا من NIXT FOR LEATHER 🌹\nتذكير ودّي بالمديونية: المتبقي على حسابكم '+fmt(c.balance)+' جنيه.'
     +(c.days>0?' أقدم مستحق من '+c.days+' يوم.':'')
     +'\nلو سمحت رتّب التحصيل في أقرب وقت، وشكرًا لتعاملكم معانا.';
   window.open('https://wa.me/'+phone+'?text='+encodeURIComponent(txt),'_blank');
