@@ -299,7 +299,7 @@ MIGRATIONS = [
 ]
 
 DEFAULT_SETTINGS = {
-    "company_name": "نيكست للجلديات - NIXT FOR LEATHER",
+    "company_name": "NIXT FOR LEATHER",
     "company_phone": "",
     "company_address": "",
     "alert_days": "30",
@@ -422,6 +422,9 @@ def init_db():
     if MIGRATED_FROM:
         conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?,?)",
                      ("migrated_from", MIGRATED_FROM))
+    # 1.9.0: company name is printed in English everywhere
+    conn.execute("UPDATE settings SET value='NIXT FOR LEATHER' WHERE key='company_name'"
+                 " AND value IN ('نيكست للجلديات', 'نيكست للجلديات - NIXT FOR LEATHER')")
     sync_schema_upgrade(conn)
     # backfill invoice numbers (added in 1.6.0)
     counts = {}
