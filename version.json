@@ -1,5 +1,6 @@
 {
-  "version": "2.9.3",
-  "zip_url": "https://github.com/hishammahmoud2626-gif/nixt-accounts/releases/download/v2.9.3/NixtAccounts-2.9.3-Portable.zip",
-  "notes": "فتح نافذة Nixt مكبّرة كل مرة وتجاهل المقاس القديم، مع تكبير مباشر لنافذة البرنامج على Windows."
+  "version": "2.9.4",
+  "zip_url": "https://github.com/hishammahmoud2626-gif/nixt-accounts/releases/download/v2.9.4/NixtAccounts-2.9.4-Portable.zip",
+  "sha256": "6872a96357d2b303158f404d96104aa7483efa4e97291b1ed1e8998e6e7af1c7",
+  "notes": "شراء الخامات والمخزن + نسخ احتياطي محلي تلقائي + نسخة Drive كاملة بعد إعادة الربط + إصلاح التحديث. جهاز كتابة واحد، والفواتير القديمة لا تغير المخزن."
 }
