@@ -1,6 +1,6 @@
 {
-  "version": "2.9.6",
-  "zip_url": "https://github.com/hishammahmoud2626-gif/nixt-accounts/releases/download/v2.9.6/NixtAccounts-2.9.6-Portable.zip",
-  "sha256": "9754f0981d007293b7adb8871ddc930cb55e72ddc4ebde499d9c75086ef6bab1",
-  "notes": "إدخال الجلد بالبواكي وقياس كل جلدة، طباعة مقاسات النعل مجمعة، تحسين عرض الموبايل، وإعادة استخدام نافذة Nixt بعد التحديث."
+  "version": "2.9.7",
+  "zip_url": "https://github.com/hishammahmoud2626-gif/nixt-accounts/releases/download/v2.9.7/NixtAccounts-2.9.7-Portable.zip",
+  "sha256": "a97df54fc19126093ef5db4085d1b8fd36d8889ba8e03c0b9f051101487b9275",
+  "notes": "جرس تنبيهات محلي للشيكات والمديونيات ومحاولات المخزون بالسالب والنسخ الاحتياطي والتحديثات، مع صلاحيات وتعليم كمقروء لكل مستخدم."
 }
