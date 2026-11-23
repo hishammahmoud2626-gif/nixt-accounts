@@ -1,5 +1,5 @@
 {
-  "version": "2.9.2",
-  "zip_url": "https://github.com/hishammahmoud2626-gif/nixt-accounts/releases/download/v2.9.2/NixtAccounts-2.9.2-Portable.zip",
-  "notes": "إصلاح import re الناقص اللي عطّل فتح النافذة. فتح آمن للنافذة مع متصفح بديل، وإغلاق السيرفر لو فتح النافذة فشل. المثبّت بيقفل Nixt بس وبيحافظ على البيانات."
+  "version": "2.9.3",
+  "zip_url": "https://github.com/hishammahmoud2626-gif/nixt-accounts/releases/download/v2.9.3/NixtAccounts-2.9.3-Portable.zip",
+  "notes": "فتح نافذة Nixt مكبّرة كل مرة وتجاهل المقاس القديم، مع تكبير مباشر لنافذة البرنامج على Windows."
 }
