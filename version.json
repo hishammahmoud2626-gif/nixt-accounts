@@ -1,5 +1,5 @@
 {
-  "version": "2.8.0",
-  "zip_url": "https://github.com/hishammahmoud2626-gif/nixt-accounts/releases/download/v2.8.0/NixtAccounts-2.8.0-Portable.zip",
-  "notes": "البرنامج بيفتح مكبّر أول مرة وبيفتكر آخر مقاس للنافذة. إلغاء فقاعة الترجمة المزعجة. زرار إنشاء اختصار Nixt على سطح المكتب باللوجو (من الإعدادات أو بانر أول تشغيل)."
+  "version": "2.8.1",
+  "zip_url": "https://github.com/hishammahmoud2626-gif/nixt-accounts/releases/download/v2.8.1/NixtAccounts-2.8.1-Portable.zip",
+  "notes": "إصلاح عطل التحديث التلقائي (كان بيفشل برسالة not enough arguments for format string). مهم: اللي عنده 2.7.0 أو 2.8.0 يحدّث يدوي مرة واحدة من نفس اللينك — يفك الضغط فوق فولدر البرنامج ويوافق على الاستبدال — وبعدها التحديث التلقائي بيرجع يشتغل لوحده."
 }
