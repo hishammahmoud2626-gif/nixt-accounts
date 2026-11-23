@@ -438,6 +438,7 @@
       <input id="su-username" placeholder="اسم المستخدم" autocomplete="off">
       <input id="su-password" type="password" placeholder="كلمة السر">
       <input id="su-password2" type="password" placeholder="تأكيد كلمة السر">
+      <input id="su-company" placeholder="اسم الشركة (اختياري)">
       <button onclick="doSetup()">إنشاء ودخول</button>
     </div>
     <div id="login-form" class="hidden">
@@ -562,6 +563,10 @@
     <div class="panel" id="today-panel">
       <h2>اليوم <span class="sub" id="today-date"></span></h2>
       <div id="today-body" class="muted">...</div>
+    </div>
+    <div class="panel" id="undo-panel" style="display:none">
+      <h2>آخر عملية اتسجلت</h2>
+      <div id="undo-body" class="muted">...</div>
     </div>
     <div class="cards" id="dash-cards"></div>
     <div class="chart-row">
@@ -955,7 +960,7 @@
       <div class="row">
         <div class="field"><label>اسم المستخدم *</label><input id="u-name" style="width:170px"></div>
         <div class="field"><label>كلمة السر *</label><input id="u-pass" type="password" style="width:150px"></div>
-        <div class="field"><label>الصلاحية</label><select id="u-role"><option value="user">مستخدم</option><option value="accountant">محاسب (الحسابات فقط)</option><option value="admin">مدير</option></select></div>
+        <div class="field"><label>الصلاحية</label><select id="u-role"><option value="user">مستخدم</option><option value="accountant">محاسب (الحسابات فقط)</option><option value="warehouse">مخزن (المخزون والإنتاج فقط)</option><option value="admin">مدير</option></select></div>
       </div>
       <div class="row" style="margin-top:10px">
         <button onclick="addUser()">إضافة</button>
@@ -1169,6 +1174,10 @@
   <!-- settings (admin) -->
   <section id="tab-settings" class="hidden">
     <div class="panel">
+      <h2>المساعدة</h2>
+      <button onclick="showGuide()">افتح دليل الاستخدام السريع</button>
+    </div>
+    <div class="panel">
       <h2>بيانات الشركة (تظهر في الطباعة)</h2>
       <div class="row">
         <div class="field"><label>اسم الشركة</label><input id="set-name" style="width:260px"></div>
@@ -1369,7 +1378,7 @@ function showLogin(){
   for(const x of ['accounts','inventory','production','settings'])
     document.getElementById('subnav-'+x).classList.add('hidden');
 }
-function roleLabel(r){ return r==='admin'?'مدير':r==='accountant'?'محاسب':'مستخدم'; }
+function roleLabel(r){ return r==='admin'?'مدير':r==='accountant'?'محاسب':r==='warehouse'?'مخزن':'مستخدم'; }
 function showApp(){
   document.getElementById('login-screen').style.display='none';
   document.getElementById('app-header').classList.remove('hidden');
@@ -1383,6 +1392,12 @@ function showApp(){
   document.querySelectorAll('.admin-only').forEach(b=>b.classList.toggle('hidden',!admin));
   if(role==='accountant'){
     for(const sec of ['inventory','production','settings']){
+      const b=document.querySelector('#nav button[data-sec="'+sec+'"]');
+      if(b) b.classList.add('hidden');
+    }
+  }
+  if(role==='warehouse'){
+    for(const sec of ['accounts','settings']){
       const b=document.querySelector('#nav button[data-sec="'+sec+'"]');
       if(b) b.classList.add('hidden');
     }
@@ -1493,6 +1508,9 @@ async function doSetup(){
   try{
     const r=await api('/api/setup',{method:'POST',body:JSON.stringify({username:u,password:p1})});
     currentUser={username:u,role:'admin'}; showApp(); bootData();
+    const comp=(document.getElementById('su-company').value||'').trim();
+    if(comp){ try{ await api('/api/settings',{method:'POST',body:JSON.stringify({company_name:comp})}); }catch(e){} }
+    setTimeout(showGuide,600);
   }catch(e){ document.getElementById('login-err').textContent=e.message; }
 }
 async function loadLoginUsers(){
@@ -1513,6 +1531,8 @@ async function loadLoginUsers(){
     document.getElementById('li-other').classList.remove('hidden');
   }catch(e){ /* keep manual form */ }
 }
+function showGuide(){ const g=document.getElementById('guide-overlay'); if(g) g.classList.remove('hidden'); }
+function closeGuide(){ const g=document.getElementById('guide-overlay'); if(g) g.classList.add('hidden'); try{localStorage.setItem('nixt_guide_seen','1');}catch(e){} }
 function pickUser(name, el){
   document.querySelectorAll('.user-chip').forEach(c=>c.classList.remove('sel'));
   const un=document.getElementById('li-username'), pk=document.getElementById('li-picked');
@@ -1547,6 +1567,9 @@ const INV_TITLES = {materials:'المخزن - الخامات',soles:'المخز�
 function showSection(sec){
   if(currentUser && currentUser.role==='accountant' && sec!=='accounts'){
     toast('صلاحيتك على الحسابات بس', true); return;
+  }
+  if(currentUser && currentUser.role==='warehouse' && sec!=='inventory' && sec!=='production'){
+    toast('صلاحيتك على المخزن والإنتاج بس', true); return;
   }
   showTab(sec==='settings'?'settings':sec==='inventory'?'inventory':sec==='production'?'production':'dash');
 }
@@ -1682,8 +1705,29 @@ function renderDashCharts(d){
 }
 
 /* ---------- dashboard ---------- */
+async function loadUndo(){
+  const p=document.getElementById('undo-panel');
+  if(!currentUser || currentUser.role!=='admin'){ if(p) p.style.display='none'; return; }
+  try{
+    const [invs,pays]=await Promise.all([api('/api/invoices'),api('/api/payments')]);
+    let last=null;
+    for(const i of invs){ if(!last || (i.created_at||'')>last.created_at) last={type:'invoice',id:i.id,created_at:i.created_at||'',label:(KIND_LABEL[i.kind]||i.kind)+' '+(i.number||('#'+i.id))+' - '+i.customer_name+' - '+fmt(i.net)+' ج'}; }
+    for(const y of pays){ if(!last || (y.created_at||'')>last.created_at) last={type:'payment',id:y.id,created_at:y.created_at||'',label:(y.party_kind==='supplier'?'دفعة لمورد':'قبض من عميل')+' - '+y.customer_name+' - '+fmt(y.total)+' ج'}; }
+    if(!last){ p.style.display='none'; return; }
+    p.style.display='';
+    document.getElementById('undo-body').innerHTML='<span style="font-size:14px">'+esc(last.label)+'</span> <button class="small danger" style="margin-inline-start:10px" onclick="undoLast(\''+last.type+'\','+last.id+')">تراجع واحذف</button> <span class="muted" style="font-size:11px">('+esc((last.created_at||'').slice(0,16))+')</span>';
+  }catch(e){}
+}
+async function undoLast(type,id){
+  if(!confirm('حذف آخر عملية نهائيًا؟ هتتشال من الحسابات والسجل.')) return;
+  try{
+    await api('/api/'+(type==='invoice'?'invoices':'payments')+'/'+id,{method:'DELETE'});
+    toast('تم التراجع عن آخر عملية');
+    loadDash(); loadInvoices(); loadPayments(); refreshCustomers();
+  }catch(e){toast(e.message,true);}
+}
 async function loadDash(){
-  loadToday();
+  loadToday(); loadUndo();
   const d = await api('/api/dashboard');
   const ms2 = d.monthly_sales || [];
   const cur = ms2.length ? ms2[ms2.length-1].total : 0;
@@ -1965,7 +2009,22 @@ async function saveInvoice(andPrint){
       }
     }
   }
-  const body={customer_id:+cid, date:v('i-date')||today(), kind,
+  const warns=[];
+  const invDate=v('i-date')||today();
+  const ageDays=Math.round((Date.parse(today())-Date.parse(invDate))/864e5);
+  if(ageDays>30) warns.push('التاريخ قديم: '+invDate+' (من '+ageDays+' يوم)');
+  if(kind==='sale'||kind==='purchase'){
+    const zeroItems=items.filter(x=>!(+x.price));
+    if(zeroItems.length) warns.push('سعر صفر في: '+zeroItems.map(x=>x.item_name).slice(0,3).join('، ')+(zeroItems.length>3?' وغيرهم':''));
+    const netNow=parseFloat((document.getElementById('i-net').textContent||'0').replace(/,/g,''))||0;
+    try{
+      const all=await api('/api/invoices?kind='+kind);
+      const dup=all.find(x=>x.customer_id==+cid && x.date===invDate && Math.abs((x.net||0)-netNow)<0.01);
+      if(dup) warns.push('في '+(KIND_LABEL[kind]||kind)+' لنفس الطرف بنفس التاريخ ونفس الصافي ('+(dup.number||('#'+dup.id))+') - متأكد إنها مش مكررة؟');
+    }catch(e){}
+  }
+  if(warns.length && !confirm('تنبيه قبل الحفظ:\n- '+warns.join('\n- ')+'\n\nتحفظ برضه؟')) return;
+  const body={customer_id:+cid, date:invDate, kind,
     shipping:v('i-shipping')||0, other_charges:v('i-other')||0, discount:v('i-discount')||0,
     notes:v('i-notes'), reason:v('i-reason'), return_of:v('i-return-of')||null, items};
   try{
@@ -2004,12 +2063,27 @@ async function loadInvoices(){
     <td>${(i.kind==='return'||i.kind==='purchase_return')?'<span class="bad">'+KIND_LABEL[i.kind]+'</span>':KIND_LABEL[i.kind]||i.kind}</td>
     <td class="num">${fmt(i.pairs)}</td><td class="num">${fmt(i.net)}</td>
     <td style="white-space:nowrap"><button class="small" onclick="openPrintChoice(${i.id})">طباعة</button>
+    <button class="small ghost" onclick="dupInvoice(${i.id})" title="نسخ الفاتورة دي لفاتورة جديدة">تكرار</button>
     <button class="small danger" ${currentUser.role!=='admin'?'style="display:none"':''} onclick="delInvoice(${i.id})">حذف</button></td></tr>`).join('');
   filterTable('inv-table', document.getElementById('inv-search').value);
 }
 async function delInvoice(id){
   if(!confirm('حذف الفاتورة رقم '+id+'؟')) return;
   await api('/api/invoices/'+id,{method:'DELETE'}); toast('تم الحذف'); loadInvoices();
+}
+async function dupInvoice(id){
+  try{
+    const inv=await api('/api/invoices/'+id);
+    document.getElementById('i-kind').value=inv.kind; onInvoiceKind();
+    document.getElementById('i-customer').value=inv.customer_id; onInvoiceCustomer();
+    document.getElementById('i-date').value=today();
+    for(const x of ['i-shipping','i-other','i-discount']) document.getElementById(x).value=0;
+    document.getElementById('i-notes').value=''; document.getElementById('i-reason').value=''; document.getElementById('i-return-of').value='';
+    document.getElementById('i-items').innerHTML='';
+    inv.items.forEach(it=>addItemRow({item_name:it.item_name,color:it.color,pairs:it.pairs,price:it.price}));
+    calcInvoice(); showTab('invoice');
+    toast('اتعملت نسخة من فاتورة '+(inv.number||('#'+id))+' - راجعها واحفظها');
+  }catch(e){toast(e.message,true);}
 }
 function companyHeader(co, title){
   return `<div class="dochead">
@@ -2132,6 +2206,8 @@ async function savePayment(){
     cheque_due:v('p-cheque-due'),cheque_bank:v('p-cheque-bank'),cheque_number:v('p-cheque-number')};
   if(!(+body.cash||+body.card||+body.transfer||+body.vcash||+body.cheque)){toast('اكتب مبلغ الدفعة',true);return;}
   if(+body.cheque&&!body.cheque_due){toast('اكتب تاريخ استحقاق الشيك',true);return;}
+  const payAge=Math.round((Date.parse(today())-Date.parse(body.date))/864e5);
+  if(payAge>30 && !confirm('تنبيه: تاريخ الدفعة قديم ('+body.date+' - من '+payAge+' يوم).\nتحفظ برضه؟')) return;
   try{
     await api('/api/payments',{method:'POST',body:JSON.stringify(body)});
     toast('تم حفظ الدفعة');
@@ -2550,7 +2626,8 @@ async function loadMovements(kind){
     <td class="num">${fmt(i.pairs)}</td><td class="num"><b>${fmt(i.net)}</b></td>
     <td>${det}</td>
     <td style="white-space:nowrap">
-      ${!isRet?`<button class="small" title="تسجيل مرتجع من الفاتورة دي" onclick="startReturn(${i.id})"><svg class="ic"><use href="#ic-refresh-cw"/></svg> مرتجع</button>`:''}
+      ${!isRet?`<button class="small" title="تسجيل مرتجع من الفاتورة دي" onclick="startReturn(${i.id})"><svg class="ic"><use href="#ic-refresh-cw"/></svg> مرتجع</button>
+      <button class="small ghost" title="نسخ الفاتورة دي لفاتورة جديدة" onclick="dupInvoice(${i.id})">تكرار</button>`:''}
       <button class="small ghost" onclick="openStatement(${i.customer_id})">كشف</button>
       <button class="small ghost" onclick="openPrintChoice(${i.id})">طباعة</button></td></tr>`;
   }).join('');
@@ -2648,6 +2725,8 @@ async function saveTreasuryPayment(){
     cheque_due:v('pm-cheque-due'),cheque_bank:v('pm-cheque-bank'),cheque_number:v('pm-cheque-number')};
   if(!(+body.cash||+body.card||+body.transfer||+body.vcash||+body.cheque)){toast('اكتب مبلغ الدفعة',true);return;}
   if(+body.cheque&&!body.cheque_due){toast('اكتب تاريخ استحقاق الشيك',true);return;}
+  const payAge=Math.round((Date.parse(today())-Date.parse(body.date))/864e5);
+  if(payAge>30 && !confirm('تنبيه: تاريخ الدفعة قديم ('+body.date+' - من '+payAge+' يوم).\nتحفظ برضه؟')) return;
   try{
     await api('/api/payments',{method:'POST',body:JSON.stringify(body)});
     document.getElementById('tpay-modal').style.display='none';
@@ -3147,11 +3226,24 @@ async function priceLookup(el){
   if(!name) return;
   const tr=el.closest('tr');
   const priceEl=tr.querySelector('.it-price');
+  if(parseFloat(priceEl.value)) return;
   const hit=invoicePrices.find(p=>p.item_name===name);
-  if(hit && !parseFloat(priceEl.value)){
+  if(hit){
     priceEl.value=hit.price;
     toast('سعر خاص للعميل: '+fmt(hit.price));
     calcInvoice();
+    return;
+  }
+  const cid=v('i-customer');
+  if(cid && document.getElementById('i-kind').value==='sale'){
+    try{
+      const r=await api('/api/item-last-price?customer_id='+encodeURIComponent(cid)+'&item_name='+encodeURIComponent(name));
+      if(r && r.price!=null && !parseFloat(priceEl.value)){
+        priceEl.value=r.price;
+        toast('آخر سعر بيع للصنف ده: '+fmt(r.price)+(r.date?' (يوم '+r.date+')':''));
+        calcInvoice();
+      }
+    }catch(e){}
   }
 }
 async function loadProfit(){
@@ -3213,6 +3305,7 @@ async function bootData(){
   await loadColors();
   loadItems(); loadItemNames();
   loadDash();
+  if(currentUser && currentUser.role==='warehouse') showTab('inventory');
 }
 setInterval(()=>{ fetch('/api/version').catch(()=>{}); }, 30000);
 (async function(){
@@ -3233,5 +3326,18 @@ setInterval(()=>{ fetch('/api/version').catch(()=>{}); }, 30000);
   }
 })();
 </script>
+<div id="guide-overlay" class="hidden" style="position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:1000;display:flex;align-items:center;justify-content:center">
+  <div class="panel" style="max-width:440px;width:92%;max-height:86vh;overflow:auto">
+    <h2>أهلاً بيك في Nixt</h2>
+    <div style="line-height:2;font-size:15px">
+      <div><b>1.</b> عرّف أصنافك من <b>التعريفات</b> (أو استوردها من إكسل).</div>
+      <div><b>2.</b> أضف عملاءك ومورديك من <b>الأطراف</b>.</div>
+      <div><b>3.</b> سجّل أول فاتورة من <b>فاتورة جديدة</b> - الأسعار بتتملى لوحدها.</div>
+      <div><b>4.</b> تابع شغلك من <b>لوحة المتابعة</b> والتقارير.</div>
+      <div class="muted" style="font-size:13px">هتلاقي الدليل ده تاني في الإعدادات لو احتجته.</div>
+    </div>
+    <button style="width:100%;margin-top:10px" onclick="closeGuide()">يلا نبدأ</button>
+  </div>
+</div>
 </body>
 </html>
