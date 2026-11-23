@@ -25,10 +25,10 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-CLIENT_ID = "__NIXT_GCLIENT_ID__"
-CLIENT_SECRET = "__NIXT_GCLIENT_SECRET__"
+CLIENT_ID = ""
+CLIENT_SECRET = ""
 
-SCOPE = "https://www.googleapis.com/auth/drive.appdata"
+SCOPE = "https://www.googleapis.com/auth/drive.appdata openid email"
 AUTH_URI = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URI = "https://oauth2.googleapis.com/token"
 API = "https://www.googleapis.com/drive/v3/files"
@@ -117,7 +117,8 @@ def begin_auth(redirect_uri):
         "response_type": "code",
         "scope": SCOPE,
         "access_type": "offline",
-        "prompt": "consent",
+        "prompt": "consent select_account",
+        "login_hint": "hishammahmoud707@gmail.com",
         "state": _pending_state,
     })
     return AUTH_URI + "?" + q, _pending_state
@@ -144,6 +145,11 @@ def finish_auth(code, state, redirect_uri):
     }
     if not tok["refresh_token"]:
         return False, "no refresh token (approve again with consent prompt)"
+    try:
+        identity = _api_json("GET","https://openidconnect.googleapis.com/v1/userinfo",tok["access_token"])
+        tok["verified_email"] = identity.get("email", "") if identity.get("email_verified") else ""
+    except Exception:
+        tok["verified_email"] = ""
     _write_token(tok)
     mark_dirty()  # push a first snapshot right away
     return True, "ok"
@@ -272,3 +278,50 @@ def start_worker(build_snapshot_bytes):
 
     t = threading.Thread(target=loop, daemon=True)
     t.start()
+
+
+# Full private database backups, separate from the view-only phone snapshot.
+FULL_BACKUP_EMAIL = "hishammahmoud707@gmail.com"
+
+def full_backup_ready():
+    tok = _read_token() or {}
+    return connected() and tok.get("verified_email", "").lower() == FULL_BACKUP_EMAIL
+
+
+def list_full_backups():
+    if not full_backup_ready():
+        raise RuntimeError("Reconnect Google with the approved account: " + FULL_BACKUP_EMAIL)
+    token = _access_token()
+    query = urllib.parse.urlencode({"spaces":"appDataFolder","q":"trashed=false and appProperties has { key='nixt_kind' and value='full_database' }","fields":"files(id,name,createdTime,size)","pageSize":100,"orderBy":"createdTime desc"})
+    return _api_json("GET",API+"?"+query,token).get("files",[])
+
+
+def upload_full_backup(path):
+    if not full_backup_ready():
+        raise RuntimeError("Reconnect Google with the approved account: " + FULL_BACKUP_EMAIL)
+    with _upload_lock:
+        token = _access_token()
+        boundary = "nixtdb" + str(time.time_ns())
+        meta = json.dumps({"name":"nixt-full-"+time.strftime("%Y%m%d-%H%M%S")+".db","parents":["appDataFolder"],"appProperties":{"nixt_kind":"full_database"}}).encode()
+        with open(path,"rb") as f:
+            content=f.read()
+        body=(b"--"+boundary.encode()+b"\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n"+meta+b"\r\n--"+boundary.encode()+b"\r\nContent-Type: application/octet-stream\r\n\r\n"+content+b"\r\n--"+boundary.encode()+b"--")
+        result=_api_json("POST",UPLOAD_API+"?uploadType=multipart",token,raw=body,ctype="multipart/related; boundary="+boundary)
+        import hashlib
+        check=_api_json("GET",API+"/"+result["id"]+"?fields=id,md5Checksum,size",token)
+        if check.get("md5Checksum") != hashlib.md5(content).hexdigest() or int(check.get("size",-1)) != len(content):
+            raise RuntimeError("Cloud backup verification failed; older versions were kept")
+        # Remove only old files explicitly tagged as Nixt full database backups.
+        for old in list_full_backups()[20:]:
+            _api_json("DELETE",API+"/"+old["id"],token)
+        return result
+
+
+def download_full_backup(file_id, destination):
+    allowed = {f["id"] for f in list_full_backups()}
+    if file_id not in allowed:
+        raise RuntimeError("Backup not found in this Nixt account")
+    request=urllib.request.Request(API+"/"+urllib.parse.quote(file_id,safe="")+"?alt=media",headers={"Authorization":"Bearer "+_access_token()})
+    with urllib.request.urlopen(request,timeout=60) as response,open(destination,"wb") as out:
+        import shutil
+        shutil.copyfileobj(response,out)
