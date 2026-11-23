@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="google" content="notranslate">
 <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48">
 <link rel="icon" type="image/png" href="/static/favicon.png" sizes="64x64">
 <link rel="icon" type="image/png" href="/static/icon-192.png" sizes="192x192">
@@ -1381,6 +1382,11 @@
       <h2 style="font-size:15px;margin-top:14px">استعادة من نسخة احتياطية <span class="sub">النسخة اليومية بتتعمل لوحدها أول تشغيل كل يوم</span></h2>
       <button class="ghost" onclick="loadBackups()">عرض النسخ المتاحة</button>
       <div id="bk-list" style="margin-top:8px"></div>
+      <h2 style="font-size:15px;margin-top:14px">اختصار سطح المكتب</h2>
+      <div class="row" style="align-items:center">
+        <button onclick="createShortcut()">إنشاء اختصار Nixt</button>
+        <span class="muted" id="sc-status"></span>
+      </div>
     </div>
     <div class="panel">
       <h2>الوصول من الموبايل <span class="sub">عرض فقط: الأرصدة والعملاء والفواتير — ممنوع أي تعديل من الموبايل</span></h2>
@@ -2848,6 +2854,7 @@ async function loadSettings(){
   document.getElementById('set-backup-dir').value=s.backup_dir||'';
   document.getElementById('set-backup-info').textContent='النسخ الاحتياطي الآن يذهب إلى: '+s.backup_dir_effective;
   document.getElementById('set-login-users').checked = (s.login_show_users!=='0');
+  loadShortcutStatus();
   document.getElementById('set-idle-min').value=s.idle_lock_minutes||'5';
   document.getElementById('set-divisor').value=s.wholesale_divisor||'1.22';
   wholesaleDivisor=parseFloat(s.wholesale_divisor)||1.22;
@@ -3888,6 +3895,45 @@ async function toggleEmployee(id){
 }
 
 /* ---------- boot ---------- */
+(function(){
+  let rsT=null;
+  window.addEventListener('resize',()=>{
+    clearTimeout(rsT);
+    rsT=setTimeout(()=>{
+      if(!currentUser) return;
+      const mx = window.outerWidth>=screen.availWidth-8 && window.outerHeight>=screen.availHeight-8;
+      api('/api/window-size',{method:'POST',body:JSON.stringify({w:window.outerWidth,h:window.outerHeight,max:mx?1:0})}).catch(()=>{});
+    },1500);
+  });
+})();
+async function loadShortcutStatus(){
+  try{
+    const s=await api('/api/shortcut-status');
+    const el=document.getElementById('sc-status');
+    if(el) el.textContent = !s.windows ? '' : (s.exists ? 'الاختصار موجود: '+s.path : 'مفيش اختصار لسه');
+  }catch(e){}
+}
+async function createShortcut(){
+  try{
+    await api('/api/create-shortcut',{method:'POST',body:'{}'});
+    toast('اتعمل اختصار Nixt على سطح المكتب');
+    document.getElementById('sc-banner').style.display='none';
+    loadShortcutStatus();
+  }catch(e){toast(e.message,true);}
+}
+async function dismissShortcutBanner(){
+  document.getElementById('sc-banner').style.display='none';
+  try{await api('/api/settings',{method:'POST',body:JSON.stringify({shortcut_dismissed:'1'})});}catch(e){}
+}
+async function shortcutBannerMaybe(){
+  try{
+    const s=await api('/api/shortcut-status');
+    if(!s.windows||s.exists) return;
+    const st=await api('/api/settings');
+    if(st.shortcut_dismissed==='1') return;
+    document.getElementById('sc-banner').style.display='flex';
+  }catch(e){}
+}
 async function bootData(){
   document.getElementById('i-date').value=today();
   document.getElementById('p-date').value=today();
@@ -3896,6 +3942,7 @@ async function bootData(){
   await loadColors();
   loadItems(); loadItemNames();
   loadDash();
+  shortcutBannerMaybe();
   if(currentUser && currentUser.role==='warehouse') showTab('inventory');
 }
 setInterval(()=>{ fetch('/api/version').catch(()=>{}); }, 30000);
@@ -3917,6 +3964,11 @@ setInterval(()=>{ fetch('/api/version').catch(()=>{}); }, 30000);
   }
 })();
 </script>
+<div id="sc-banner" class="panel" style="display:none;position:fixed;bottom:18px;left:18px;z-index:900;align-items:center;gap:10px;padding:10px 14px">
+  <span>عايز اختصار للبرنامج على سطح المكتب باسم Nixt مع اللوجو؟</span>
+  <button class="small" onclick="createShortcut()">إنشاء</button>
+  <button class="small ghost" onclick="dismissShortcutBanner()">لأ</button>
+</div>
 <div id="guide-overlay" class="hidden" style="position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:1000;display:flex;align-items:center;justify-content:center">
   <div class="panel" style="max-width:440px;width:92%;max-height:86vh;overflow:auto">
     <h2>أهلاً بيك في Nixt</h2>
