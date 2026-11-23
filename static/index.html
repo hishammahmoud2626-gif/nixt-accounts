@@ -800,11 +800,11 @@
       <div style="background:var(--accent-soft);border:1px solid #ecd9be;border-radius:10px;padding:12px;margin-bottom:12px">
         <div class="row" style="margin-bottom:8px;align-items:end">
           <div class="field"><label>الصنف / الموديل *</label><input id="se-item" list="se-items" style="width:190px" placeholder="مثال: 999" onchange="sePriceLookup();seTotals()" autocomplete="off"><datalist id="se-items"></datalist></div>
-          <div class="field"><label>سعر الزوج</label><input id="se-price" type="number" min="0" step="0.01" class="num" style="width:100px" oninput="seTotals()"></div>
-          <button class="ghost small" onclick="seComputePrice(true)" title="احسب السعر من سعر المستهلك">احسب السعر</button>
+          <div class="field"><label>سعر المستهلك (الزوج)</label><input id="se-price" type="number" min="0" step="0.01" class="num" style="width:100px" oninput="seTotals()"></div>
+          <button class="ghost small" onclick="seComputePrice(true)" title="ملء سعر المستهلك المسجل للصنف">سعر الصنف المسجل</button>
           <div style="flex:1"></div>
           <div class="field" style="align-items:center"><label>إجمالي الأزواج</label><div class="num" id="se-total-pairs" style="font-weight:700;font-size:17px">0</div></div>
-          <div class="field" style="align-items:center"><label>إجمالي السعر</label><div class="num" id="se-total-price" style="font-weight:700;font-size:17px">0</div></div>
+          <div class="field" style="align-items:center"><label>إجمالي المستهلك</label><div class="num" id="se-total-price" style="font-weight:700;font-size:17px">0</div><div class="muted num" id="se-total-ws" style="font-size:11px"></div></div>
         </div>
         <div class="row" style="margin-bottom:6px;align-items:center">
           <label style="font-size:12px;color:var(--muted);font-weight:600;margin:0">الألوان - علّم واكتب العدد:</label>
@@ -817,9 +817,7 @@
           <span class="muted">كل لون معلّم بينزل سطر لوحده في الفاتورة بنفس السعر.</span>
         </div>
       </div>
-      <table class="items-table"><thead><tr>
-        <th style="width:40%">الصنف</th><th>اللون</th><th>أزواج</th><th>سعر الزوج</th><th>الإجمالي</th><th></th>
-      </tr></thead><tbody id="i-items"></tbody></table>
+      <table class="items-table"><thead><tr id="i-items-head"></tr></thead><tbody id="i-items"></tbody></table>
       <div style="margin:8px 0"><button class="small ghost" onclick="addItemRow()">+ سطر يدوي</button></div>
       <div class="row">
         <div class="field"><label>شحن</label><input id="i-shipping" type="number" step="0.01" class="num" style="width:100px" value="0" oninput="calcInvoice()"></div>
@@ -829,7 +827,7 @@
         <div class="field hidden" id="i-reason-field"><label>سبب المرتجع</label><input id="i-reason" style="width:200px" placeholder="مثال: عيب تصنيع، مقاس"></div>
       </div>
       <div class="totals">
-        <span>الأصناف: <b id="i-items-total" class="num">0</b></span>
+        <span>الأصناف (جملة): <b id="i-items-total" class="num">0</b></span> <span class="muted num" id="i-retail-total" style="font-size:11px"></span>
         <span>الأزواج: <b id="i-pairs" class="num">0</b></span>
         <span>الصافي: <b id="i-net" class="num">0</b> جنيه</span>
       </div>
@@ -1391,7 +1389,7 @@
         <span class="muted" id="mob-status"></span>
       </div>
       <div id="mob-body" class="hidden">
-        <p class="muted">على نفس الواي فاي: امسح كود "نفس الواي فاي". من بره البيت: ثبّت Tailscale على الكمبيوتر والموبايل وامسح كود "من بره البيت". الكمبيوتر لازم يكون شغال والبرنامج مفتوح.</p>
+        <p class="muted">على نفس الواي فاي: امسح كود "نفس الواي فاي" (الأفضل). من بره البيت: ثبّت Tailscale على الكمبيوتر والموبايل وامسح كود "من بره البيت". الكمبيوتر لازم يكون شغال والبرنامج مفتوح. عنوان يبدأ بـ 169.254 معناه إن الكمبيوتر مش واخد شبكة - صلّح الواي فاي الأول. لو الموبايل مش بيوصل: شغّل ملف "فتح-المنفذ-في-جدار-الحماية.bat" جنب البرنامج مرة واحدة.</p>
         <div id="mob-urls" class="row" style="gap:22px;flex-wrap:wrap"></div>
         <div class="row">
           <div class="field"><label>مفتاح الوصول (للكتابة اليدوية في تطبيق الموبايل)</label><input id="mob-key" class="num" style="width:290px" readonly onclick="this.select()"></div>
@@ -1519,9 +1517,10 @@ let partyKind = 'customer';
 let partyModalKind = null;
 function openModal(id){ document.getElementById(id).style.display='flex'; }
 function closeModal(id){ document.getElementById(id).style.display='none'; }
-function openPartyModal(kind){
+async function openPartyModal(kind){
   partyModalKind = kind||partyKind;
   resetCustomerForm();
+  try{ const nc=await api('/api/parties/next-code?kind='+partyModalKind); if(!v('c-id')&&!v('c-code')) document.getElementById('c-code').value=nc.code; }catch(e){}
   document.getElementById('cust-form-title').textContent = partyModalKind==='supplier'?'إضافة مورد جديد':'إضافة عميل جديد';
   document.querySelectorAll('#party-modal .cust-only').forEach(el=>el.style.display=(partyModalKind==='customer')?'':'none');
   openModal('party-modal');
@@ -1984,6 +1983,7 @@ function fillInvoiceParties(){
   document.getElementById('i-party-label').textContent = kind==='supplier'?'المورد *':'العميل *';
 }
 function onInvoiceKind(){
+  renderItemsHead();
   fillInvoiceParties(); onInvoiceCustomer(); calcInvoice();
   const k=document.getElementById('i-kind').value;
   document.getElementById('i-reason-field').classList.toggle('hidden', !(k==='return'||k==='purchase_return'));
@@ -2216,20 +2216,21 @@ async function saveItem(){
     toast('تم حفظ الصنف'); closeModal('item-modal'); loadItems(); loadItemNames();
   }catch(e){toast(e.message,true);}
 }
+function invIsCustomer(){ return KIND_PARTY[document.getElementById('i-kind').value]==='customer'; }
+function custDiscPct(){ const c=customers.find(x=>x.id==v('i-customer')); return (c&&invIsCustomer())?(+c.discount_pct||0):0; }
+function retailToWs(r){ return Math.round((r/(wholesaleDivisor||1.22))*(1-custDiscPct()/100)*100)/100; }
 function seComputePrice(showToast){
   const name=v('se-item').trim();
   if(!name) return;
   const priceEl=document.getElementById('se-price');
   const hit=invoicePrices.find(p=>p.item_name===name);
-  if(hit){ priceEl.value=hit.price; if(showToast) toast('سعر خاص للعميل: '+fmt(hit.price)); return; }
+  if(hit){ priceEl.value=hit.price; if(showToast) toast('سعر خاص للعميل (سعر مستهلك): '+fmt(hit.price)); seTotals(); return; }
   const it=itemsMaster.find(x=>x.name===name);
-  if(it && it.retail_price && wholesaleDivisor){
-    let p=it.retail_price/wholesaleDivisor;
-    const c=customers.find(x=>x.id==v('i-customer'));
-    if(c && c.discount_pct && KIND_PARTY[document.getElementById('i-kind').value]==='customer') p=p*(1-c.discount_pct/100);
-    priceEl.value=(Math.round(p*100)/100);
-    if(showToast) toast('سعر الجملة المحسوب: '+fmt(priceEl.value));
+  if(it && it.retail_price){
+    priceEl.value=it.retail_price;
+    if(showToast) toast('سعر المستهلك المسجل: '+fmt(it.retail_price));
   } else if(showToast){ toast('الصنف ده ملهوش سعر مستهلك متسجل - سجله من تعريفات أول بالمبيعات', true); }
+  seTotals();
 }
 function sePriceLookup(){ seComputePrice(false); }
 
@@ -2263,6 +2264,8 @@ function seTotals(){
   const price=parseFloat(v('se-price'))||0;
   document.getElementById('se-total-pairs').textContent=fmt(pairs);
   document.getElementById('se-total-price').textContent=fmt(pairs*price);
+  const wsEl=document.getElementById('se-total-ws');
+  if(wsEl) wsEl.textContent=(invIsCustomer()&&price)?('الجملة بعد الخصم ≈ '+fmt(pairs*retailToWs(price))):'';
 }
 function seClear(){ document.getElementById('se-item').value=''; document.getElementById('se-price').value=''; renderChips(); seTotals(); }
 function openColorsModal(){ renderColorsList(); document.getElementById('cl-new').value=''; openModal('colors-modal'); }
@@ -2288,32 +2291,61 @@ function seCommit(){
   renderChips(); seTotals();
   calcInvoice();
 }
+function renderItemsHead(){
+  document.getElementById('i-items-head').innerHTML = invIsCustomer()
+    ? '<th style="width:30%">الصنف</th><th>اللون</th><th>أزواج</th><th>سعر المستهلك</th><th>جملة/زوج</th><th>الإجمالي</th><th></th>'
+    : '<th style="width:40%">الصنف</th><th>اللون</th><th>أزواج</th><th>سعر الزوج</th><th>الإجمالي</th><th></th>';
+}
 function addItemRow(it){
   it = it||{};
   const tr = document.createElement('tr');
-  tr.innerHTML = `<td><input class="it-name" value="${esc(it.item_name||'')}" onchange="priceLookup(this)"></td>
-    <td><input class="it-color" value="${esc(it.color||'')}"></td>
-    <td><input class="it-pairs num" type="number" min="0" step="1" value="${it.pairs??''}" oninput="calcInvoice()"></td>
-    <td><input class="it-price num" type="number" min="0" step="0.01" value="${it.price??''}" oninput="calcInvoice()"></td>
-    <td class="it-total num">0</td>
-    <td><button class="small danger" onclick="this.closest('tr').remove();calcInvoice()">×</button></td>`;
+  if(invIsCustomer()){
+    tr.innerHTML = `<td><input class="it-name" value="${esc(it.item_name||'')}" onchange="priceLookup(this)"></td>
+      <td><input class="it-color" value="${esc(it.color||'')}"></td>
+      <td><input class="it-pairs num" type="number" min="0" step="1" value="${it.pairs??''}" oninput="calcInvoice()"></td>
+      <td><input class="it-retail num" type="number" min="0" step="0.01" value="${it.retail_price??it.price??''}" oninput="calcInvoice()"></td>
+      <td class="it-ws num muted">0</td>
+      <td class="it-total num">0</td>
+      <td><button class="small danger" onclick="this.closest('tr').remove();calcInvoice()">×</button></td>`;
+  }else{
+    tr.innerHTML = `<td><input class="it-name" value="${esc(it.item_name||'')}" onchange="priceLookup(this)"></td>
+      <td><input class="it-color" value="${esc(it.color||'')}"></td>
+      <td><input class="it-pairs num" type="number" min="0" step="1" value="${it.pairs??''}" oninput="calcInvoice()"></td>
+      <td><input class="it-price num" type="number" min="0" step="0.01" value="${it.price??''}" oninput="calcInvoice()"></td>
+      <td class="it-total num">0</td>
+      <td><button class="small danger" onclick="this.closest('tr').remove();calcInvoice()">×</button></td>`;
+  }
   document.getElementById('i-items').appendChild(tr);
 }
 function readItems(){
-  const items=[]; let total=0, pairs=0;
+  const items=[]; let total=0, pairs=0, retailTotal=0;
   document.querySelectorAll('#i-items tr').forEach(tr=>{
     const name=tr.querySelector('.it-name').value.trim();
     const p=parseFloat(tr.querySelector('.it-pairs').value)||0;
-    const pr=parseFloat(tr.querySelector('.it-price').value)||0;
+    const rEl=tr.querySelector('.it-retail');
+    let pr, retail=null;
+    if(rEl){
+      retail=parseFloat(rEl.value)||0;
+      pr=retailToWs(retail);
+      const wsCell=tr.querySelector('.it-ws'); if(wsCell) wsCell.textContent=retail?fmt(pr):'';
+    }else{
+      pr=parseFloat(tr.querySelector('.it-price').value)||0;
+    }
     const t=p*pr; tr.querySelector('.it-total').textContent=fmt(t);
-    if(name){ items.push({item_name:name,color:tr.querySelector('.it-color').value.trim(),pairs:p,price:pr}); total+=t; pairs+=p; }
+    if(name){
+      const o={item_name:name,color:tr.querySelector('.it-color').value.trim(),pairs:p};
+      if(rEl){ o.retail_price=retail; } else { o.price=pr; }
+      items.push(o); total+=t; pairs+=p; if(retail!=null) retailTotal+=p*retail;
+    }
   });
-  return {items,total,pairs};
+  return {items,total,pairs,retailTotal};
 }
 function calcInvoice(){
-  const {total,pairs}=readItems();
+  const {total,pairs,retailTotal}=readItems();
   const ship=parseFloat(v('i-shipping'))||0, other=parseFloat(v('i-other'))||0, disc=parseFloat(v('i-discount'))||0;
   document.getElementById('i-items-total').textContent=fmt(total);
+  const rt=document.getElementById('i-retail-total');
+  if(rt) rt.textContent=invIsCustomer()?('مستهلك: '+fmt(retailTotal)):'';
   document.getElementById('i-pairs').textContent=fmt(pairs);
   document.getElementById('i-net').textContent=fmt(total+ship+other-disc);
 }
@@ -2353,7 +2385,7 @@ async function saveInvoice(andPrint){
   const ageDays=Math.round((Date.parse(today())-Date.parse(invDate))/864e5);
   if(ageDays>30) warns.push('التاريخ قديم: '+invDate+' (من '+ageDays+' يوم)');
   if(kind==='sale'||kind==='purchase'){
-    const zeroItems=items.filter(x=>!(+x.price));
+    const zeroItems=items.filter(x=>!((+x.price)||(+x.retail_price)));
     if(zeroItems.length) warns.push('سعر صفر في: '+zeroItems.map(x=>x.item_name).slice(0,3).join('، ')+(zeroItems.length>3?' وغيرهم':''));
     const netNow=parseFloat((document.getElementById('i-net').textContent||'0').replace(/,/g,''))||0;
     try{
@@ -2414,6 +2446,7 @@ async function loadInvoices(){
     <td>${(i.kind==='return'||i.kind==='purchase_return')?'<span class="bad">'+KIND_LABEL[i.kind]+'</span>':KIND_LABEL[i.kind]||i.kind}</td>
     <td class="num">${fmt(i.pairs)}</td><td class="num">${fmt(i.net)}</td>
     <td style="white-space:nowrap"><button class="small" onclick="openPrintChoice(${i.id})">طباعة</button>
+    ${(i.kind==='sale'||i.kind==='return')?`<button class="small ghost" onclick="repriceInvoice(${i.id})" title="لو السعر اللي اتكتب في الفاتورة دي كان سعر مستهلك - اضغط هنا للتصحيح">تصحيح سعر</button>`:''}
     <button class="small ghost" onclick="dupInvoice(${i.id})" title="نسخ الفاتورة دي لفاتورة جديدة">تكرار</button>
     <button class="small danger" ${canDeleteDocs()?'':'style="display:none"'} onclick="delInvoice(${i.id})">حذف</button></td></tr>`).join('');
   filterTable('inv-table', document.getElementById('inv-search').value);
@@ -2423,6 +2456,14 @@ function canDeleteDocs(){
   if(currentUser.role==='admin') return true;
   if(currentUser.perms && currentUser.perms.ops && currentUser.perms.ops.indexOf('delete_docs')>=0) return false;
   return true;
+}
+async function repriceInvoice(id){
+  if(!confirm('تصحيح تفسير أسعار الفاتورة دي:\nالسعر المكتوب فيها هيتعتبر "سعر مستهلك"، والجملة هيتحسب منه (مستهلك ÷ القاسم، وبعدين خصم العميل).\nالأرصدة والتقارير هتتحدث لوحدها. متأكد؟')) return;
+  try{
+    const r=await api('/api/invoices/'+id+'/reprice-retail',{method:'POST',body:'{}'});
+    toast('اتصححت - الصافي بقى '+fmt(r.new_net)+' ج بدل '+fmt(r.old_net)+' ج');
+    loadInvoices();
+  }catch(e){toast(e.message,true);}
 }
 async function delInvoice(id, tok, confirmed){
   if(!confirmed && !confirm('حذف الفاتورة رقم '+id+'؟')) return;
@@ -2443,7 +2484,7 @@ async function dupInvoice(id){
     for(const x of ['i-shipping','i-other','i-discount']) document.getElementById(x).value=0;
     document.getElementById('i-notes').value=''; document.getElementById('i-reason').value=''; document.getElementById('i-return-of').value='';
     document.getElementById('i-items').innerHTML='';
-    inv.items.forEach(it=>addItemRow({item_name:it.item_name,color:it.color,pairs:it.pairs,price:it.price}));
+    inv.items.forEach(it=>addItemRow({item_name:it.item_name,color:it.color,pairs:it.pairs,price:it.price,retail_price:it.retail_price}));
     calcInvoice(); showTab('invoice');
     toast('اتعملت نسخة من فاتورة '+(inv.number||('#'+id))+' - راجعها واحفظها');
   }catch(e){toast(e.message,true);}
@@ -2740,7 +2781,7 @@ async function loadMobileConfig(){
       let qrSvg='';
       try{const qr=qrcode(0,'M');qr.addData(u.url);qr.make();qrSvg=qr.createSvgTag({cellSize:4,margin:1});}catch(e){}
       d.innerHTML='<div style="background:#fff;border-radius:10px;padding:8px;display:inline-block">'+qrSvg+'</div>'+
-        '<div style="margin-top:6px;font-weight:700;font-size:12.5px">'+(u.tailscale?'من بره البيت (Tailscale)':'نفس الواي فاي')+'</div>'+
+        '<div style="margin-top:6px;font-weight:700;font-size:12.5px">'+(u.tailscale?'من بره البيت (Tailscale)':'نفس الواي فاي')+(u.recommended?' <span style="color:#166534;font-size:11px">(الأفضل - امسح ده)</span>':'')+'</div>'+
         '<div class="muted num" style="font-size:11px">'+esc(u.ip)+':'+c.port+'</div>';
       box.appendChild(d);
     });
@@ -3066,8 +3107,25 @@ async function runUpdate(){
   try{
     const r=await api('/api/do-update',{method:'POST',body:'{}'});
     document.getElementById('update-status').innerHTML=
-      'تم التثبيت. البرنامج هيتقفل ويفتح لوحده على النسخة الجديدة - بياناتك محفوظة واتعمل لها نسخة احتياطية قبل التحديث.';
-  }catch(e){ document.getElementById('update-status').textContent='فشل التحديث: '+e.message; }
+      'التثبيت بدأ. البرنامج هيتقفل لحظة ويفتح لوحده <b>في نفس النافذة دي</b> - متقفلهاش. بياناتك محفوظة واتعمل لها نسخة احتياطية قبل التحديث.';
+  }catch(e){ document.getElementById('update-status').textContent='فشل التحديث: '+e.message; return; }
+  const t0=Date.now(); let sawDown=false;
+  const iv=setInterval(async()=>{
+    try{
+      const rv=await api('/api/version');
+      if(sawDown||Date.now()-t0>4000){
+        clearInterval(iv);
+        document.getElementById('update-status').innerHTML='تم التحديث للنسخة <b class="num">'+esc(rv.version||'')+'</b> - بيعاد تحميل البرنامج...';
+        setTimeout(()=>location.reload(),1200);
+      }
+    }catch(e){
+      sawDown=true;
+      if(Date.now()-t0>180000){
+        clearInterval(iv);
+        document.getElementById('update-status').innerHTML='التحديث اتأخر أكتر من المعتاد. اقفل النافذة وشغّل البرنامج من START.bat في فولدر البرنامج. لو المشكلة فضلت: ابعت ملف update-log.txt من فولدر بيانات البرنامج (AppData\\NixtAccounts).';
+      }
+    }
+  },3000);
 }
 function closeUpdate(){ document.getElementById('update-modal').style.display='none'; }
 
