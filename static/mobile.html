@@ -22,9 +22,34 @@
   --shadow:0 1px 3px rgba(0,0,0,.4); --shadow-lg:0 12px 34px rgba(0,0,0,.55);
   --radius:14px;
 }
+:root[data-theme="light"]{
+  --bg:#f4f1ec; --card:#ffffff; --card2:#efeae3; --ink:#25211b; --muted:#6f6961;
+  --brand:#e7e0d7; --brand2:#f3eee7; --accent:#b45309; --accent2:#d97706; --accent3:#92400e;
+  --accent-soft:#f6e5c9; --ok:#15803d; --ok-soft:#daf0e2; --bad:#b91c1c; --bad-soft:#f6dada;
+  --line:#ddd5ca; --line2:#c8bfb2;
+  --shadow:0 1px 3px rgba(60,50,40,.14); --shadow-lg:0 12px 34px rgba(60,50,40,.22);
+}
+:root[data-theme="light"] .iconbtn{background:rgba(0,0,0,.05);border-color:rgba(0,0,0,.16);color:#3a342c}
+:root[data-theme="light"] .iconbtn:active{background:rgba(0,0,0,.12)}
+:root[data-font="big"]{--fs:17px}
+:root[data-font="huge"]{--fs:19px}
+:root[data-touch="big"] .iconbtn{width:48px;height:48px}
+:root[data-touch="big"] .iconbtn svg{width:23px;height:23px}
+:root[data-touch="big"] .qbtn{padding:18px 10px;font-size:14px;gap:9px}
+:root[data-touch="big"] .qbtn svg{width:26px;height:26px}
+:root[data-touch="big"] .row-item{padding:15px 6px;font-size:1.05em}
+:root[data-touch="big"] .f-input,:root[data-touch="big"] .f-select{padding:15px 13px;font-size:16px}
+:root[data-touch="big"] .fchip{padding:9px 15px;font-size:14px}
+:root[data-touch="big"] .mini-btn{padding:9px 15px;font-size:14px}
+:root[data-touch="big"] nav button{font-size:12px;padding:11px 2px;gap:5px}
+:root[data-touch="big"] nav button svg{width:25px;height:25px}
+.popt{flex:1;background:var(--card2);border:1px solid var(--line2);color:var(--muted);border-radius:11px;
+  padding:10px 6px;font-family:inherit;font-size:13.5px;font-weight:800;cursor:pointer}
+.popt.on{background:var(--accent-soft);border-color:var(--accent2);color:var(--accent3)}
+.prow{display:flex;gap:8px}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html,body{margin:0;padding:0}
-body{font-family:"Cairo","Segoe UI",Tahoma,sans-serif;background:var(--bg);color:var(--ink);font-size:15px;min-height:100vh}
+body{font-family:"Cairo","Segoe UI",Tahoma,sans-serif;background:var(--bg);color:var(--ink);font-size:var(--fs,15px);min-height:100vh}
 .num{font-variant-numeric:tabular-nums;direction:ltr;unicode-bidi:embed}
 /* header */
 header{position:sticky;top:0;z-index:30;background:linear-gradient(180deg,var(--brand2),var(--brand));
@@ -177,6 +202,9 @@ button.primary{background:linear-gradient(180deg,var(--accent),var(--accent2));c
   <span class="badge" id="badge-view">عرض فقط</span>
   <button class="iconbtn" id="btn-refresh" title="تحديث">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
+  </button>
+  <button class="iconbtn" id="btn-prefs" title="إعدادات العرض" onclick="openSheet('prefs')">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
   </button>
 </header>
 
@@ -482,14 +510,44 @@ function partyOptions(kind){
 }
 function openSheet(kind){
   const sh=$('sheet');
-  if(kind==='invoice'){sh.innerHTML=invoiceForm();}
+  if(kind==='prefs'){sh.innerHTML=prefsForm();}
+  else if(kind==='invoice'){sh.innerHTML=invoiceForm();}
   else{sh.innerHTML=receiptForm(kind);}
   $('sheet-overlay').style.display='block';sh.style.display='block';
   const fm=$('f-method');
   if(fm){fm.onchange=function(){$('f-due-wrap').style.display=(fm.value==='cheque')?'block':'none';};}
   if(kind==='invoice'){addItemRow();ensureItemNames();}
+  if(kind==='prefs'){markPrefs();}
 }
 function closeSheet(){$('sheet-overlay').style.display='none';$('sheet').style.display='none';}
+const PREFS_KEY='nixt_m_prefs';
+function getPrefs(){try{return JSON.parse(localStorage.getItem(PREFS_KEY)||'{}');}catch(e){return{};}}
+function applyPrefs(){
+  const p=getPrefs(),h=document.documentElement;
+  h.dataset.theme=p.theme||'dark';
+  h.dataset.font=p.font||'';
+  h.dataset.touch=p.touch||'';
+}
+function setPref(k,v){
+  const p=getPrefs();p[k]=v;
+  try{localStorage.setItem(PREFS_KEY,JSON.stringify(p));}catch(e){}
+  applyPrefs();markPrefs();
+}
+function markPrefs(){
+  const p=getPrefs();
+  document.querySelectorAll('.popt').forEach(function(b){
+    const cur=p[b.dataset.k]||(b.dataset.k==='theme'?'dark':'');
+    b.classList.toggle('on',cur===b.dataset.v);
+  });
+}
+function popt(k,v,label){return '<button class="popt" data-k="'+k+'" data-v="'+v+'" onclick="setPref(\''+k+'\',\''+v+'\')">'+label+'</button>';}
+function prefsForm(){
+  return '<h3>إعدادات العرض</h3>'+
+  '<label class="f-label">المظهر</label><div class="prow">'+popt('theme','dark','داكن')+popt('theme','light','فاتح')+'</div>'+
+  '<label class="f-label">حجم الخط</label><div class="prow">'+popt('font','','عادي')+popt('font','big','كبير')+popt('font','huge','أكبر')+'</div>'+
+  '<label class="f-label">حجم الأزرار</label><div class="prow">'+popt('touch','','عادي')+popt('touch','big','أزرار أكبر')+'</div>'+
+  '<button class="primary" onclick="closeSheet()">تم</button>';
+}
 function receiptForm(kind){
   const isIn=kind==='receipt';
   return '<h3>'+(isIn?'سند قبض جديد':'سند صرف جديد')+'</h3>'+
@@ -586,6 +644,7 @@ async function load(manual){
   }
 }
 if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js').catch(()=>{});}
+applyPrefs();
 load(false);
 </script>
 </body>
