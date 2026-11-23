@@ -36,7 +36,7 @@ try:
 except Exception:
     drive_sync = None
 
-APP_VERSION = "2.1.0"
+APP_VERSION = "2.2.0"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -1386,7 +1386,27 @@ class API:
         drv = bool(drive_sync is not None and drive_sync.connected())
         return 200, {"company_name": name, "version": APP_VERSION,
                      "view_only": (user or {}).get("role") == "view",
+                     "quick_add": (user or {}).get("role") == "mobile",
                      "drive_connected": drv}
+
+    def mobile_today_summary(q, user):
+        conn = get_db()
+        today = datetime.now().strftime("%Y-%m-%d")
+        week = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d")
+        chqs = rows(conn.execute(
+            "SELECT c.id, c.due_date, c.amount, c.status, c.cheque_number, c.bank,"
+            " cu.name AS customer_name, cu.kind AS party_kind"
+            " FROM cheques c JOIN customers cu ON cu.id=c.customer_id"
+            " WHERE c.status IN ('pending','endorsed') AND c.due_date<=?"
+            " ORDER BY c.due_date, c.id LIMIT 50", (week,)))
+        for c in chqs:
+            c["overdue"] = c["due_date"] < today
+            c["due_today"] = c["due_date"] == today
+        conn.close()
+        _st, ag = API.aging({}, user)
+        debtors = [c for c in ag.get("customers", [])
+                   if (c.get("d60") or 0) + (c.get("d90") or 0) > 0.005][:5]
+        return 200, {"date": today, "cheques": chqs, "debtors": debtors}
 
     def mobile_config(q, user):
         return 200, mobile_config_payload()
@@ -3160,7 +3180,8 @@ def build_snapshot_bytes():
                     ("dashboard", API.dashboard),
                     ("customers", API.list_customers),
                     ("invoices", API.list_invoices),
-                    ("today", API.today)):
+                    ("today", API.today),
+                    ("today_summary", API.mobile_today_summary)):
         try:
             _st, obj = fn({}, fake_admin)
             parts[key] = obj
@@ -3253,6 +3274,7 @@ ROUTES_GET = {
     "/api/model-profit": (API.model_profit, True),
     "/api/quotations": (API.list_quotations, False),
     "/api/mobile/bootstrap": (API.mobile_bootstrap, False),
+    "/api/mobile/today-summary": (API.mobile_today_summary, False),
     "/api/mobile/config": (API.mobile_config, True),
     "/api/drive/status": (API.drive_status, True),
     "/api/backups": (API.list_backups, True),
@@ -3278,6 +3300,17 @@ def view_get_allowed(path):
     if path.startswith("/api/invoices/"):
         return path.rsplit("/", 1)[1].isdigit()
     return False
+
+
+MOBILE_GET_EXTRA = {"/api/cheques", "/api/aging", "/api/statement", "/api/item-names",
+                    "/api/mobile/today-summary"}
+MOBILE_POST_PATHS = {"/api/payments", "/api/invoices", "/api/customers"}
+
+
+def mobile_get_allowed(path):
+    if path in MOBILE_GET_EXTRA:
+        return True
+    return view_get_allowed(path)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -3347,7 +3380,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if path == "/" or path == "/index.html":
                 u0 = self._user()
-                if u0 and u0["role"] == "view":
+                if u0 and u0["role"] in ("view", "mobile"):
                     return self._redirect("/mobile")
                 return self._send_file(os.path.join(STATIC_DIR, "index.html"),
                                        "text/html; charset=utf-8")
@@ -3357,9 +3390,9 @@ class Handler(BaseHTTPRequestHandler):
                 conn.close()
                 key = (q.get("k") or [""])[0]
                 if en and key and key == mobile_key_get():
-                    token = new_session(None, "موبايل", "view")
+                    token = new_session(None, "موبايل", "mobile")
                     extra = [pn + "=" + (q.get(pn) or [""])[0]
-                             for pn in ("s", "inv") if (q.get(pn) or [""])[0]]
+                             for pn in ("s", "inv", "sheet") if (q.get(pn) or [""])[0]]
                     loc = "/mobile" + ("?" + "&".join(extra) if extra else "")
                     return self._redirect(loc, self._set_session(token))
                 return self._send(403, {"error": "mobile_link_invalid"})
@@ -3391,6 +3424,8 @@ class Handler(BaseHTTPRequestHandler):
             if not user:
                 return self._send(401, {"error": "login_required"})
             if user["role"] == "view" and not view_get_allowed(path):
+                return self._send(403, {"error": "view_only"})
+            if user["role"] == "mobile" and not mobile_get_allowed(path):
                 return self._send(403, {"error": "view_only"})
             if path in ROUTES_GET:
                 fn, adm = ROUTES_GET[path]
@@ -3435,6 +3470,8 @@ class Handler(BaseHTTPRequestHandler):
             if not user:
                 return self._send(401, {"error": "login_required"})
             if user["role"] == "view":
+                return self._send(403, {"error": "view_only"})
+            if user["role"] == "mobile" and path not in MOBILE_POST_PATHS:
                 return self._send(403, {"error": "view_only"})
             if SYNC_STATE["locked_by"] and path not in ("/api/sync/pull", "/api/sync/force-lock", "/api/sync/status"):
                 lk = SYNC_STATE["locked_by"]
