@@ -189,6 +189,24 @@ button.primary{background:linear-gradient(180deg,var(--accent),var(--accent2));c
   border-radius:50%;margin:0 auto 14px;animation:spin .8s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
 .empty{padding:26px;text-align:center;color:var(--muted);font-size:13px}
+/* ===== 2.4.0 PIN gate ===== */
+#pin-gate{position:fixed;inset:0;background:radial-gradient(700px 420px at 70% 10%,#3a2c1c 0%,#1a140e 45%,#0d0b09 100%);z-index:400;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px;color:#ece7e1}
+#pin-gate img{max-width:170px;margin-bottom:6px}
+#pin-gate h2{font-size:18px;margin:4px 0 14px}
+.pin-users{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin-bottom:16px}
+.pin-chip{display:flex;flex-direction:column;align-items:center;gap:4px;width:86px;padding:10px 4px;border:2px solid #4a3f30;border-radius:14px;background:rgba(255,255,255,.04);color:#ece7e1;cursor:pointer}
+.pin-chip.sel{border-color:#d9904a;background:rgba(217,144,74,.12)}
+.pin-chip .pav{width:40px;height:40px;border-radius:50%;background:#b45309;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700}
+.pin-chip .pnm{font-size:12.5px;font-weight:600;word-break:break-all}
+.pin-dots{display:flex;gap:10px;justify-content:center;margin:6px 0 14px;min-height:14px}
+.pin-dots span{width:13px;height:13px;border-radius:50%;border:2px solid #8a7a66;display:inline-block}
+.pin-dots span.on{background:#d9904a;border-color:#d9904a}
+.pin-pad{display:grid;grid-template-columns:repeat(3,78px);gap:10px}
+.pin-key{height:56px;border-radius:14px;border:1px solid #4a3f30;background:rgba(255,255,255,.06);color:#fff;font-size:22px;font-weight:700;font-family:inherit;cursor:pointer}
+.pin-key:active{background:rgba(217,144,74,.25)}
+.pin-key.go{background:#b45309;border-color:#b45309;font-size:16px}
+.pin-key.clr{font-size:13px;color:#d9904a}
+.pin-err{color:#f87171;font-size:13px;min-height:18px;margin-bottom:8px;text-align:center}
 </style>
 </head>
 <body>
@@ -200,6 +218,9 @@ button.primary{background:linear-gradient(180deg,var(--accent),var(--accent2));c
   </div>
   <div class="spacer"></div>
   <span class="badge" id="badge-view">عرض فقط</span>
+  <button class="iconbtn" id="btn-lock" title="قفل" style="display:none" onclick="lockNow()">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+  </button>
   <button class="iconbtn" id="btn-refresh" title="تحديث">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
   </button>
@@ -207,6 +228,15 @@ button.primary{background:linear-gradient(180deg,var(--accent),var(--accent2));c
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
   </button>
 </header>
+
+<div id="pin-gate" style="display:none">
+  <img class="logo" src="/static/logo.png" alt="NIXT">
+  <h2>مين اللي بيشتغل؟</h2>
+  <div id="pin-users" class="pin-users"></div>
+  <div id="pin-dots" class="pin-dots"></div>
+  <div id="pin-err" class="pin-err"></div>
+  <div class="pin-pad" id="pin-pad"></div>
+</div>
 
 <main id="main" style="display:none">
   <!-- home -->
@@ -330,7 +360,9 @@ let invFilter='';
 async function api(p){
   const r=await fetch(p);
   if(r.status===401){showGate();throw new Error('login');}
-  if(!r.ok){const j=await r.json().catch(()=>({}));throw new Error(j.error||'خطأ');}
+  if(!r.ok){const j=await r.json().catch(()=>({}));
+    if(j.error==='pin_required'){showPinGate();throw new Error('pin');}
+    throw new Error(j.error||'خطأ');}
   return r.json();
 }
 function showGate(){$('boot').style.display='none';$('gate').style.display='block';}
@@ -462,6 +494,7 @@ async function apiPost(p,body){
   if(r.status===401){showGate();throw new Error('login');}
   const j=await r.json().catch(()=>({}));
   if(!r.ok){
+    if(j.error==='pin_required'){showPinGate();throw new Error('pin');}
     if(j.error==='view_only'){throw new Error('حدّث برنامج الكمبيوتر للإصدار 2.2.0 عشان الإضافة من الموبايل تشتغل');}
     throw new Error(j.error||'خطأ');
   }
@@ -620,8 +653,100 @@ async function submitInvoice(){
   }catch(e){err.textContent=e.message;}
 }
 
+/* ---------- 2.4.0 PIN gate ---------- */
+let PIN_OK=false, PIN_ENTERED='', PIN_LOCK_TIMER=null, MOBILE_IDLE_MIN=0, mobileIdleTimer=null;
+async function pinCheck(){
+  try{
+    const s=await api('/api/mobile/pin-status');
+    $('btn-lock').style.display=s.required?'':'none';
+    if(s.required && !s.ok){ showPinGate(s); return false; }
+    PIN_OK=true;
+    try{ const me=await api('/api/me'); MOBILE_IDLE_MIN=me.idle_lock_minutes||0; }catch(e2){}
+    if(s.required) startMobileIdle();
+    return true;
+  }catch(e){
+    if(e.message==='pin') return false;
+    return true; /* خادم قديم من غير PIN - كمّل عادي */
+  }
+}
+function showPinGate(s){
+  $('boot').style.display='none'; $('gate').style.display='none';
+  $('main').style.display='none'; $('nav').style.display='none';
+  PIN_ENTERED=''; renderPinDots();
+  $('pin-err').textContent='';
+  if(!s){
+    fetch('/api/mobile/pin-status').then(r=>r.json()).then(j=>showPinGate(j)).catch(()=>{});
+    return;
+  }
+  $('pin-users').innerHTML=(s.users||[]).map((u,i)=>
+    '<div class="pin-chip'+(i===0?' sel':'')+'" onclick="pinPick(this)">'+
+    '<div class="pav">'+esc(u.initials)+'</div><div class="pnm">'+esc(u.username)+'</div></div>').join('');
+  renderPinPad();
+  $('pin-gate').style.display='flex';
+}
+function pinPick(el){
+  document.querySelectorAll('.pin-chip').forEach(c=>c.classList.remove('sel'));
+  el.classList.add('sel');
+}
+function renderPinDots(){
+  $('pin-dots').innerHTML='';
+  for(let i=0;i<PIN_ENTERED.length;i++){ const s=document.createElement('span'); s.className='on'; $('pin-dots').appendChild(s); }
+}
+function renderPinPad(){
+  const keys=['1','2','3','4','5','6','7','8','9','C','0','OK'];
+  $('pin-pad').innerHTML=keys.map(k=>{
+    if(k==='C') return '<button class="pin-key clr" onclick="pinKey(\'C\')">مسح</button>';
+    if(k==='OK') return '<button class="pin-key go" onclick="pinKey(\'OK\')">دخول</button>';
+    return '<button class="pin-key num" onclick="pinKey(\''+k+'\')">'+k+'</button>';
+  }).join('');
+}
+function pinKey(k){
+  if(PIN_LOCK_TIMER) return;
+  if(k==='C'){ PIN_ENTERED=''; renderPinDots(); return; }
+  if(k==='OK'){ doPinLogin(); return; }
+  if(PIN_ENTERED.length>=8) return;
+  PIN_ENTERED+=k; renderPinDots();
+}
+async function doPinLogin(){
+  if(PIN_ENTERED.length<4){ $('pin-err').textContent='الرقم السري 4 أرقام على الأقل'; return; }
+  const r=await fetch('/api/mobile/pin-login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pin:PIN_ENTERED})});
+  const j=await r.json().catch(()=>({}));
+  PIN_ENTERED=''; renderPinDots();
+  if(r.status===429 && j.locked){ startPinCountdown(j.wait||300, j.error); return; }
+  if(!r.ok){ $('pin-err').textContent=j.error||'الرقم السري غلط'; return; }
+  PIN_OK=true;
+  $('pin-gate').style.display='none';
+  $('btn-lock').style.display='';
+  toast('أهلًا '+j.username);
+  load(false);
+}
+function startPinCountdown(wait,msg){
+  let left=Math.max(1,wait|0);
+  clearInterval(PIN_LOCK_TIMER);
+  const tick=()=>{
+    const m=Math.floor(left/60), s=left%60;
+    $('pin-err').textContent=(msg||'متقفل مؤقتًا')+' - فاضل '+m+':'+String(s).padStart(2,'0');
+    if(left<=0){ clearInterval(PIN_LOCK_TIMER); PIN_LOCK_TIMER=null; $('pin-err').textContent=''; }
+    left--;
+  };
+  tick(); PIN_LOCK_TIMER=setInterval(tick,1000);
+}
+async function lockNow(){
+  try{ await fetch('/api/mobile/lock',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}); }catch(e){}
+  PIN_OK=false; showPinGate();
+}
+function startMobileIdle(){
+  clearTimeout(mobileIdleTimer);
+  if(!MOBILE_IDLE_MIN) return;
+  mobileIdleTimer=setTimeout(()=>{ if(PIN_OK) lockNow(); }, MOBILE_IDLE_MIN*60*1000);
+}
+['click','touchstart','keydown'].forEach(ev=>document.addEventListener(ev,()=>{
+  if(PIN_OK && $('pin-gate').style.display!=='flex') startMobileIdle();
+},{passive:true}));
+
 /* ---------- load ---------- */
 async function load(manual){
+  if(!(await pinCheck())) return;
   try{
     const [boot,dash,custs,supps,invs]=await Promise.all([
       api('/api/mobile/bootstrap'), api('/api/dashboard'),
