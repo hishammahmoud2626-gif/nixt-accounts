@@ -36,7 +36,7 @@ try:
 except Exception:
     drive_sync = None
 
-APP_VERSION = "2.4.0"
+APP_VERSION = "2.5.0"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -321,6 +321,7 @@ DEFAULT_SETTINGS = {
     "device_name": "",
     "wholesale_divisor": "1.22",
     "idle_lock_minutes": "5",
+    "approval_discount_limit": "200",
     "colors": "أسود,بني,هافان,أبيض,كحلي,رمادي,تانجو",
 }
 
@@ -551,8 +552,33 @@ def set_closed_months(conn, lst):
 
 # ---------------- auth ----------------
 PBKDF2_ROUNDS = 120000
-SESSIONS = {}  # token -> {uid, username, role, exp}
+SESSIONS = {}  # token -> {uid, username, role, exp, sid, created, last, ua, ip}
 SESSION_HOURS = 12
+REQ = threading.local()  # per-request context: ua, ip
+
+APPROVALS = {}  # token -> {"by": manager username, "exp": ts}
+APPROVAL_MINUTES = 5
+
+
+def approval_check(token):
+    if not token:
+        return None
+    ap = APPROVALS.get(token)
+    if not ap:
+        return None
+    if ap["exp"] < time.time():
+        APPROVALS.pop(token, None)
+        return None
+    return ap["by"]
+
+
+def device_short(ua):
+    ua = (ua or "").lower()
+    if any(k in ua for k in ("mobile", "android", "iphone", "ipad")):
+        return "موبايل"
+    if ua:
+        return "كمبيوتر"
+    return ""
 
 
 def hash_password(password, salt=None):
@@ -581,8 +607,13 @@ def users_count():
 
 def new_session(uid, username, role):
     token = secrets.token_urlsafe(32)
+    now = time.time()
     SESSIONS[token] = {"uid": uid, "username": username, "role": role,
-                       "exp": time.time() + SESSION_HOURS * 3600}
+                       "exp": now + SESSION_HOURS * 3600,
+                       "sid": secrets.token_hex(4),
+                       "created": now, "last": now,
+                       "ua": getattr(REQ, "ua", "") or "",
+                       "ip": getattr(REQ, "ip", "") or ""}
     return token
 
 
@@ -593,6 +624,7 @@ def get_session(token):
     if s["exp"] < time.time():
         SESSIONS.pop(token, None)
         return None
+    s["last"] = time.time()
     return s
 
 
@@ -1317,6 +1349,10 @@ class API:
         if not ok:
             login_throttle_fail(uname)
             wait = login_throttle_wait(uname)
+            log_action(conn, {"username": uname}, "دخول فاشل",
+                       ("بالرقم السري" if pin else "بكلمة السر") + " - " +
+                       (device_short(getattr(REQ, "ua", "")) or "جهاز غير معروف"))
+            conn.commit()
             if wait > 0 and u:
                 exp = (datetime.now() + timedelta(seconds=wait)).strftime("%Y-%m-%d %H:%M:%S")
                 conn.execute("UPDATE users SET locked_until=? WHERE id=?", (exp, u["id"]))
@@ -1331,7 +1367,8 @@ class API:
         conn.execute("UPDATE users SET last_login=?, locked_until='' WHERE id=?",
                      (now_str(), u["id"]))
         log_action(conn, {"username": u["username"]}, "تسجيل دخول",
-                   "بالرقم السري" if pin else "بكلمة السر")
+                   ("بالرقم السري" if pin else "بكلمة السر") + " - " +
+                   (device_short(getattr(REQ, "ua", "")) or "جهاز غير معروف"))
         conn.commit()
         conn.close()
         return 200, {"ok": True, "token": new_session(u["id"], u["username"], u["role"]),
@@ -1388,6 +1425,65 @@ class API:
                 r["perms"] = None
         conn.close()
         return 200, out
+
+    def list_sessions(q, user):
+        now = time.time()
+        out = []
+        for tok, s in list(SESSIONS.items()):
+            if s["exp"] < now:
+                SESSIONS.pop(tok, None)
+                continue
+            out.append({"sid": s.get("sid", ""), "username": s.get("username", ""),
+                        "role": s.get("role", ""),
+                        "created": datetime.fromtimestamp(s.get("created", now)).strftime("%Y-%m-%d %H:%M:%S"),
+                        "last": datetime.fromtimestamp(s.get("last", now)).strftime("%Y-%m-%d %H:%M:%S"),
+                        "device": device_short(s.get("ua", "")),
+                        "current": s is user})
+        out.sort(key=lambda r: r["last"], reverse=True)
+        return 200, out
+
+    def kick_session(body, user):
+        sid = (body or {}).get("sid", "")
+        if sid and sid == user.get("sid"):
+            return 400, {"error": "دي الجلسة الحالية - اعمل خروج عادي بدلها"}
+        for tok, s in list(SESSIONS.items()):
+            if s.get("sid") == sid:
+                SESSIONS.pop(tok, None)
+                conn = get_db()
+                log_action(conn, user, "إنهاء جلسة", "%s (%s)" % (s.get("username", ""), s.get("role", "")))
+                conn.commit()
+                conn.close()
+                return 200, {"ok": True}
+        return 404, {"error": "الجلسة مش موجودة (يمكن خلصت لوحدها)"}
+
+    def approve(body, user):
+        pin = (body.get("pin") or "").strip()
+        if not pin:
+            return 400, {"error": "اكتب الرقم السري بتاع المدير"}
+        key = "approve:" + (user or {}).get("username", "?")
+        wait = login_throttle_wait(key)
+        if wait > 0:
+            return 429, {"error": "محاولات كتير غلط - استنى شوية", "locked": True, "wait": wait}
+        conn = get_db()
+        admins = conn.execute("SELECT * FROM users WHERE role='admin' AND pin_hash<>'' AND disabled=0").fetchall()
+        mgr = None
+        for a in admins:
+            if check_password(pin, a["pin_hash"]):
+                mgr = a
+                break
+        if not mgr:
+            conn.close()
+            login_throttle_fail(key)
+            time.sleep(0.5)
+            return 401, {"error": "الرقم السري بتاع المدير غلط"}
+        login_throttle_clear(key)
+        tok = secrets.token_urlsafe(16)
+        APPROVALS[tok] = {"by": mgr["username"], "exp": time.time() + APPROVAL_MINUTES * 60}
+        log_action(conn, user, "طلب موافقة مدير",
+                   "وافق %s - صالحة %d دقايق" % (mgr["username"], APPROVAL_MINUTES))
+        conn.commit()
+        conn.close()
+        return 200, {"ok": True, "approval": tok, "by": mgr["username"]}
 
     def create_user(body, user):
         uname = norm_username(body.get("username"))
@@ -1536,6 +1632,11 @@ class API:
     def mobile_pin_status(q, user):
         conn = get_db()
         us = rows(conn.execute("SELECT username, role FROM users WHERE pin_hash<>'' AND disabled=0 ORDER BY username"))
+        since = (datetime.now() - timedelta(hours=24)).strftime("%Y-%m-%d %H:%M:%S")
+        recent = rows(conn.execute(
+            "SELECT username, action, details, ts FROM activity_log"
+            " WHERE ts>=? AND action IN ('تسجيل دخول','دخول بالرقم السري','دخول فاشل')"
+            " ORDER BY id DESC LIMIT 20", (since,)))
         conn.close()
         out = []
         for r in us:
@@ -1543,7 +1644,8 @@ class API:
             initials = "".join(w[0] for w in name.split()[:2]).upper() or name[:1].upper()
             out.append({"username": name, "role": r["role"], "initials": initials})
         return 200, {"required": len(us) > 0, "ok": bool(user.get("pin_ok")),
-                     "users": out, "user": user.get("pin_user", "")}
+                     "users": out, "user": user.get("pin_user", ""),
+                     "recent_logins": recent}
 
     def mobile_pin_login(body, user):
         pin = (body.get("pin") or "").strip()
@@ -1566,6 +1668,10 @@ class API:
                 conn.commit()
                 conn.close()
                 return 200, {"ok": True, "username": u["username"], "role": u["role"]}
+        conn = get_db()
+        log_action(conn, {"username": "؟"}, "دخول فاشل", "رقم سري - موبايل")
+        conn.commit()
+        conn.close()
         login_throttle_fail("pin:mobile")
         time.sleep(0.5)
         wait = login_throttle_wait("pin:mobile")
@@ -1844,6 +1950,20 @@ class API:
         if month_is_closed(conn, idate):
             conn.close()
             return 400, {"error": "شهر " + idate[:7] + " متقفل - افتحه من تاب التقارير لو محتاج تسجل فيه"}
+        disc = float(body.get("discount") or 0)
+        try:
+            lim = float(get_setting(conn, "approval_discount_limit", "200") or 0)
+        except (TypeError, ValueError):
+            lim = 0.0
+        if user.get("role") != "admin" and lim > 0 and disc > lim:
+            approver = approval_check(body.get("approval") or "")
+            if not approver:
+                conn.close()
+                return 403, {"error": "الخصم ده أكبر من المسموح (%s ج) - محتاج موافقة المدير بالرقم السري" % round(lim, 2),
+                             "need_approval": True, "limit": lim}
+            log_action(conn, user, "خصم كبير بموافقة مدير",
+                       "خصم %s - وافق %s" % (round(disc, 2), approver))
+            conn.commit()
         last = conn.execute("SELECT number FROM invoices WHERE kind=? AND number != '' "
                             "ORDER BY id DESC LIMIT 1", (kind,)).fetchone()
         seq = 1
@@ -1901,10 +2021,15 @@ class API:
         conn.close()
         return 200, inv
 
-    def delete_invoice(iid):
+    def delete_invoice(iid, user=None, approver=""):
         conn = get_db()
+        inv = conn.execute("SELECT number FROM invoices WHERE id=?", (iid,)).fetchone()
         conn.execute("DELETE FROM invoice_items WHERE invoice_id=?", (iid,))
         conn.execute("DELETE FROM invoices WHERE id=?", (iid,))
+        note = (inv["number"] or ("#%d" % iid)) if inv else ("#%d" % iid)
+        if approver:
+            note += " - بموافقة المدير " + approver
+        log_action(conn, user, "حذف فاتورة", note)
         conn.commit()
         conn.close()
         return 200, {"ok": True}
@@ -1990,7 +2115,7 @@ class API:
         conn.close()
         return 200, {"id": pid}
 
-    def delete_payment(pid, user=None):
+    def delete_payment(pid, user=None, approver=""):
         conn = get_db()
         pm = conn.execute("SELECT * FROM payments WHERE id=?", (pid,)).fetchone()
         conn.execute("DELETE FROM payments WHERE id=?", (pid,))
@@ -1998,8 +2123,10 @@ class API:
         conn.execute("DELETE FROM treasury WHERE source='payment' AND source_id=?", (pid,))
         if pm:
             cust = conn.execute("SELECT name FROM customers WHERE id=?", (pm["customer_id"],)).fetchone()
-            log_action(conn, user, "حذف دفعة",
-                       "%s - %s" % (cust["name"] if cust else pm["customer_id"], pm["date"]))
+            det = "%s - %s" % (cust["name"] if cust else pm["customer_id"], pm["date"])
+            if approver:
+                det += " - بموافقة المدير " + approver
+            log_action(conn, user, "حذف دفعة", det)
         conn.commit()
         conn.close()
         return 200, {"ok": True}
@@ -2598,8 +2725,21 @@ class API:
 
     # ---------- activity log ----------
     def list_activity(q, user):
+        d = (q.get("date", [""])[0] or "").strip()
+        un = (q.get("user", [""])[0] or "").strip()
+        sql = "SELECT * FROM activity_log"
+        conds, args = [], []
+        if d:
+            conds.append("ts LIKE ?")
+            args.append(d + "%")
+        if un:
+            conds.append("username=?")
+            args.append(un)
+        if conds:
+            sql += " WHERE " + " AND ".join(conds)
+        sql += " ORDER BY id DESC LIMIT 500"
         conn = get_db()
-        out = rows(conn.execute("SELECT * FROM activity_log ORDER BY id DESC LIMIT 200"))
+        out = rows(conn.execute(sql, args))
         conn.close()
         return 200, out
 
@@ -3509,6 +3649,8 @@ ROUTES_POST = {
     "/api/mobile/config": (lambda b, u: API.mobile_config_save(b, u), True),
     "/api/sync/force-lock": (lambda b, u: API.sync_force_lock(b, u), True),
     "/api/unlock": (lambda b, u: API.unlock_session(b, u), False),
+    "/api/approve": (lambda b, u: API.approve(b, u), False),
+    "/api/sessions/kick": (lambda b, u: API.kick_session(b, u), True),
     "/api/mobile/pin-login": (lambda b, u: API.mobile_pin_login(b, u), False),
     "/api/mobile/lock": (lambda b, u: API.mobile_lock(b, u), False),
 }
@@ -3545,6 +3687,7 @@ ROUTES_GET = {
     "/api/items": (API.list_items, False),
     "/api/profit": (API.profit, True),
     "/api/users": (API.list_users, True),
+    "/api/sessions": (API.list_sessions, True),
     "/api/check-update": (API.check_update, False),
     "/api/mobile/pin-status": (API.mobile_pin_status, False),
 }
@@ -3655,6 +3798,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         u = urlparse(self.path)
+        REQ.ua = self.headers.get("User-Agent") or ""
+        REQ.ip = self.client_address[0] if self.client_address else ""
         path, q = u.path, parse_qs(u.query)
         try:
             if path == "/" or path == "/index.html":
@@ -3727,6 +3872,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         u = urlparse(self.path)
+        REQ.ua = self.headers.get("User-Agent") or ""
+        REQ.ip = self.client_address[0] if self.client_address else ""
         path = u.path
         try:
             length = int(self.headers.get("Content-Length") or 0)
@@ -3811,12 +3958,22 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_DELETE(self):
         u = urlparse(self.path)
+        REQ.ua = self.headers.get("User-Agent") or ""
+        REQ.ip = self.client_address[0] if self.client_address else ""
         try:
             user = self._user()
             if not user:
                 return self._send(401, {"error": "login_required"})
+            approver = ""
             if user["role"] != "admin":
-                return self._send(403, {"error": "admin_required"})
+                _dparts = u.path.strip("/").split("/")
+                if len(_dparts) == 3 and _dparts[0] == "api" and _dparts[1] in ("invoices", "payments"):
+                    approver = approval_check(self.headers.get("X-Approval") or "")
+                    if not approver:
+                        return self._send(403, {"error": "محتاج موافقة المدير بالرقم السري",
+                                                "need_approval": True})
+                else:
+                    return self._send(403, {"error": "admin_required"})
             if SYNC_STATE["locked_by"]:
                 lk = SYNC_STATE["locked_by"]
                 return self._send(423, {"error": "device_locked",
@@ -3825,9 +3982,9 @@ class Handler(BaseHTTPRequestHandler):
             parts = u.path.strip("/").split("/")
             if len(parts) == 3 and parts[0] == "api":
                 if parts[1] == "invoices":
-                    return self._send(*API.delete_invoice(int(parts[2])))
+                    return self._send(*API.delete_invoice(int(parts[2]), user, approver))
                 if parts[1] == "payments":
-                    return self._send(*API.delete_payment(int(parts[2]), user))
+                    return self._send(*API.delete_payment(int(parts[2]), user, approver))
                 if parts[1] == "treasury":
                     return self._send(*API.delete_treasury(int(parts[2]), user))
                 if parts[1] == "prices":
