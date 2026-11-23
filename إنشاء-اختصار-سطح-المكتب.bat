@@ -1,7 +1,10 @@
 @echo off
 chcp 65001 >nul
-title اختصار سطح المكتب - نيكست
-"%~dp0python\python.exe" -c "import os,winshell" 2>nul
-powershell -NoProfile -Command "$ws=New-Object -ComObject WScript.Shell; $sc=$ws.CreateShortcut([Environment]::GetFolderPath('Desktop')+'\نيكست - الحسابات.lnk'); $sc.TargetPath='%~dp0START.bat'; $sc.WorkingDirectory='%~dp0'; $sc.IconLocation='%~dp0logo.ico'; $sc.Save(); $sm=[Environment]::GetFolderPath('StartMenu')+'\\Programs\\نيكست - الحسابات.lnk'; $sc2=$ws.CreateShortcut($sm); $sc2.TargetPath='%~dp0START.bat'; $sc2.WorkingDirectory='%~dp0'; $sc2.IconLocation='%~dp0logo.ico'; $sc2.Save()"
-echo تم إنشاء الاختصار على سطح المكتب.
+title Nixt - Desktop Shortcut
+set "NIXT_SC_TARGET=%~dp0START.bat"
+set "NIXT_SC_DIR=%~dp0"
+set "NIXT_SC_ICON=%~dp0logo.ico"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ws=New-Object -ComObject WScript.Shell; $sc=$ws.CreateShortcut((Join-Path ([Environment]::GetFolderPath('Desktop')) 'Nixt.lnk')); $sc.TargetPath=$env:NIXT_SC_TARGET; $sc.WorkingDirectory=$env:NIXT_SC_DIR; $sc.IconLocation=$env:NIXT_SC_ICON + ',0'; $sc.Description='Nixt Accounts'; $sc.Save()"
+echo.
+echo تم - لو ظهر اختصار Nixt على سطح المكتب يبقى تمام. لو مفيش، اقفل أي برنامج حماية وجرّب تاني.
 pause
