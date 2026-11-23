@@ -36,7 +36,7 @@ try:
 except Exception:
     drive_sync = None
 
-APP_VERSION = "2.8.0"
+APP_VERSION = "2.9.0"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -1811,6 +1811,33 @@ class API:
             return 200, {"ok": True, "path": lnk}
         return 500, {"error": "فشل إنشاء الاختصار - جرّب ملف إنشاء-اختصار-سطح-المكتب.bat جنب البرنامج"}
 
+    def item_monthly(q, user):
+        name = (q.get("name", [""])[0] or "").strip()
+        out = {"matched": [], "rows": []}
+        if not name:
+            return 200, out
+        conn = get_db()
+        names = [r[0] for r in conn.execute(
+            "SELECT DISTINCT item_name FROM invoice_items WHERE item_name LIKE ? "
+            "ORDER BY item_name LIMIT 10", ("%" + name + "%",))]
+        out["matched"] = names
+        exact = name if name in names else (names[0] if len(names) == 1 else None)
+        if exact:
+            sign = {"sale": 1.0, "return": -1.0}
+            rows = {}
+            for r in conn.execute(
+                    "SELECT substr(i.date,1,7) AS m, i.kind, it.pairs, it.price "
+                    "FROM invoice_items it JOIN invoices i ON i.id=it.invoice_id "
+                    "WHERE it.item_name=? AND i.kind IN ('sale','return')", (exact,)):
+                s = sign.get(r["kind"], 1.0)
+                a = rows.setdefault(r["m"], {"month": r["m"], "pairs": 0.0, "total": 0.0})
+                a["pairs"] += s * (r["pairs"] or 0)
+                a["total"] += s * (r["pairs"] or 0) * (r["price"] or 0)
+            out["rows"] = sorted(rows.values(), key=lambda x: x["month"], reverse=True)
+            out["item"] = exact
+        conn.close()
+        return 200, out
+
     # ---------- mobile ----------
     def mobile_bootstrap(q, user):
         conn = get_db()
@@ -2567,31 +2594,8 @@ class API:
         # ASCII - Arabic/space paths in a .bat get mangled by cmd's codepage
         # (root cause of the silent 2.5.0->2.6.0 failure).
         old_dir = BASE_DIR.rstrip(os.sep)
-        bat = os.path.join(old_dir, "nixt-apply-update.bat")
-        new_start = os.path.join(old_dir, "START.bat")
         log_path = os.path.join(os.path.dirname(DATA_DIR), "update-log.txt")
-        bat_lines = [
-            '@echo off',
-            'title Nixt Update',
-            'cd /d "%TEMP%"',
-            'echo === update start %date% %time% ===>>"%NIXT_LOG%"',
-            'echo Waiting for the app to close...',
-            'ping -n 4 127.0.0.1 >nul',
-            # kill whatever still listens on the app port (the old server)
-            'for /f "tokens=5" %%a in (\'netstat -ano ^| findstr /C:":%d " ^| findstr /C:"LISTENING"\') do taskkill /F /PID %%a >>"%NIXT_LOG%" 2>&1' % PORT,
-            'ping -n 2 127.0.0.1 >nul',
-            'echo Copying new files...',
-            'robocopy "%NIXT_STAGING%" "%NIXT_OLD%" /E /IS /NFL /NDL /NJH /R:2 /W:1 >>"%NIXT_LOG%" 2>&1',
-            'echo Restarting...',
-            'start "" "%NIXT_START%"',
-            'ping -n 3 127.0.0.1 >nul',
-            'rmdir /s /q "%NIXT_STAGING%" >>"%NIXT_LOG%" 2>&1',
-            'rmdir /s /q "%NIXT_UPDIR%" >>"%NIXT_LOG%" 2>&1',
-            'echo === update done %date% %time% ===>>"%NIXT_LOG%"',
-            '(goto) 2>nul & del "%~f0"',
-        ]
-        with open(bat, "w") as f:
-            f.write("\r\n".join(bat_lines) + "\r\n")
+        bat = build_update_bat(old_dir)
 
         def _handoff():
             try:
@@ -3866,6 +3870,7 @@ ROUTES_GET = {
     "/api/prices": (API.list_prices, False),
     "/api/item-names": (API.list_item_names, False),
     "/api/top-items": (API.top_items, False),
+    "/api/item-monthly": (API.item_monthly, False),
     "/api/today": (API.today, False),
     "/api/model-profit": (API.model_profit, True),
     "/api/quotations": (API.list_quotations, False),
@@ -4208,6 +4213,40 @@ def port_busy():
         return False
     finally:
         s.close()
+
+
+def build_update_bat(old_dir):
+    """Write the apply-update bat next to the program and return its path.
+    All dynamic values travel via environment variables (%NIXT_*%): the bat
+    body stays pure ASCII/literal, and nothing here may use Python % string
+    formatting (a literal %VAR% in the template crashes formatting - this
+    exact bug broke 2.7.0's updater)."""
+    bat = os.path.join(old_dir, "nixt-apply-update.bat")
+    kill = ('for /f "tokens=5" %%a in (\'netstat -ano ^| findstr /C:":'
+            + str(PORT) + ' " ^| findstr /C:"LISTENING"\') '
+            'do taskkill /F /PID %%a >>"%NIXT_LOG%" 2>&1')
+    bat_lines = [
+        '@echo off',
+        'title Nixt Update',
+        'cd /d "%TEMP%"',
+        'echo === update start %date% %time% ===>>"%NIXT_LOG%"',
+        'echo Waiting for the app to close...',
+        'ping -n 4 127.0.0.1 >nul',
+        kill,
+        'ping -n 2 127.0.0.1 >nul',
+        'echo Copying new files...',
+        'robocopy "%NIXT_STAGING%" "%NIXT_OLD%" /E /IS /NFL /NDL /NJH /R:2 /W:1 >>"%NIXT_LOG%" 2>&1',
+        'echo Restarting...',
+        'start "" "%NIXT_START%"',
+        'ping -n 3 127.0.0.1 >nul',
+        'rmdir /s /q "%NIXT_STAGING%" >>"%NIXT_LOG%" 2>&1',
+        'rmdir /s /q "%NIXT_UPDIR%" >>"%NIXT_LOG%" 2>&1',
+        'echo === update done %date% %time% ===>>"%NIXT_LOG%"',
+        '(goto) 2>nul & del "%~f0"',
+    ]
+    with open(bat, "w", newline="") as f:
+        f.write("\r\n".join(bat_lines) + "\r\n")
+    return bat
 
 
 def desktop_path():
