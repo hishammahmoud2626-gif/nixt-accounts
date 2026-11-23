@@ -241,6 +241,7 @@ button.primary{background:linear-gradient(180deg,var(--accent),var(--accent2));c
 <main id="main" style="display:none">
   <!-- home -->
   <section class="screen on" id="scr-home">
+    <div class="panel" id="login-notice" style="display:none"></div>
     <div class="quick" id="quick-add" style="display:none">
       <button class="qbtn" onclick="openSheet('receipt')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg>
@@ -661,6 +662,7 @@ async function pinCheck(){
     $('btn-lock').style.display=s.required?'':'none';
     if(s.required && !s.ok){ showPinGate(s); return false; }
     PIN_OK=true;
+    showLoginNotice(s);
     try{ const me=await api('/api/me'); MOBILE_IDLE_MIN=me.idle_lock_minutes||0; }catch(e2){}
     if(s.required) startMobileIdle();
     return true;
@@ -743,6 +745,23 @@ function startMobileIdle(){
 ['click','touchstart','keydown'].forEach(ev=>document.addEventListener(ev,()=>{
   if(PIN_OK && $('pin-gate').style.display!=='flex') startMobileIdle();
 },{passive:true}));
+
+function showLoginNotice(s){
+  try{
+    const rl=(s&&s.recent_logins)||[];
+    if(!rl.length) return;
+    const day=new Date().toDateString();
+    if(sessionStorage.getItem('nixt-login-notice')===day) return;
+    sessionStorage.setItem('nixt-login-notice',day);
+    const fails=rl.filter(x=>x.action==='دخول فاشل');
+    const oks=rl.filter(x=>x.action!=='دخول فاشل').slice(0,5);
+    const el=$('login-notice'); if(!el) return;
+    el.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px"><b style="font-size:14px">تنبيه: حركة دخول آخر 24 ساعة</b><button class="link-btn" style="margin:0" onclick="document.getElementById(\'login-notice\').style.display=\'none\'">إخفاء</button></div>'+
+      oks.map(x=>'<div style="font-size:13px;padding:2px 0">'+esc(x.username)+' · <span class="muted">'+esc((x.ts||'').slice(5,16))+'</span>'+(x.details?' · '+esc(x.details):'')+'</div>').join('')+
+      (fails.length?'<div style="font-size:13px;color:#e88;padding-top:4px">محاولات دخول غلط: '+fails.length+'</div>':'');
+    el.style.display='';
+  }catch(e){}
+}
 
 /* ---------- load ---------- */
 async function load(manual){
