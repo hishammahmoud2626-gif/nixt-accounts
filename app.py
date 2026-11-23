@@ -12,6 +12,7 @@ import hashlib
 import hmac
 import io
 import json
+import math
 import os
 import re
 import secrets
@@ -37,7 +38,7 @@ try:
 except Exception:
     drive_sync = None
 
-APP_VERSION = "2.9.3"
+APP_VERSION = "2.9.4"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -172,6 +173,15 @@ CREATE TABLE IF NOT EXISTS invoices (
   notes TEXT DEFAULT '',
   created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS stock_movements (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ item_name TEXT NOT NULL, material_type TEXT NOT NULL,
+ color TEXT NOT NULL DEFAULT '', size TEXT NOT NULL DEFAULT '', unit TEXT NOT NULL,
+ quantity REAL NOT NULL, kind TEXT NOT NULL, date TEXT NOT NULL,
+ reason TEXT NOT NULL DEFAULT '', invoice_id INTEGER,
+ reverses_id INTEGER UNIQUE, created_at TEXT NOT NULL, username TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS stock_key ON stock_movements(item_name,material_type,color,size,unit);
 CREATE TABLE IF NOT EXISTS invoice_items (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   invoice_id INTEGER NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
@@ -303,6 +313,10 @@ CREATE TABLE IF NOT EXISTS cheque_events (
 
 # columns added after 1.0.0: (table, column, ddl)
 MIGRATIONS = [
+    ("invoices", "stock_posted", "ALTER TABLE invoices ADD COLUMN stock_posted INTEGER DEFAULT 0"),
+    ("invoice_items", "material_type", "ALTER TABLE invoice_items ADD COLUMN material_type TEXT DEFAULT ''"),
+    ("invoice_items", "unit", "ALTER TABLE invoice_items ADD COLUMN unit TEXT DEFAULT 'pair'"),
+    ("invoice_items", "size", "ALTER TABLE invoice_items ADD COLUMN size TEXT DEFAULT ''"),
     ("customers", "kind", "ALTER TABLE customers ADD COLUMN kind TEXT NOT NULL DEFAULT 'customer'"),
     ("customers", "code", "ALTER TABLE customers ADD COLUMN code TEXT DEFAULT ''"),
     ("customers", "address", "ALTER TABLE customers ADD COLUMN address TEXT DEFAULT ''"),
@@ -363,7 +377,11 @@ def now_str():
 class _NixtConn(sqlite3.Connection):
     """Main-DB connection: every commit flags the Drive snapshot as stale."""
     def commit(self):
+        changed = self.total_changes > getattr(self, "_backed_changes", 0)
         super().commit()
+        self._backed_changes = self.total_changes
+        if changed and "continuous_backup_dirty" in globals():
+            continuous_backup_dirty()
         if drive_sync is not None:
             try:
                 drive_sync.mark_dirty()
@@ -740,13 +758,19 @@ def backup_dir_effective(conn=None):
 def do_backup():
     """Copy the DB to the backup folder with a timestamp. Returns the path."""
     os.makedirs(BACKUP_DIR, exist_ok=True)
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     dest = os.path.join(backup_dir_effective(), "nixt-%s.db" % stamp)
+    temp=dest+".tmp"
     src = get_db()
-    dst = sqlite3.connect(dest)
-    src.backup(dst)
-    dst.close()
-    src.close()
+    dst = sqlite3.connect(temp)
+    try:
+        src.backup(dst)
+        if dst.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+            raise RuntimeError("Backup integrity check failed")
+    finally:
+        dst.close()
+        src.close()
+    os.replace(temp,dest)
     for folder in {BACKUP_DIR, os.path.dirname(dest)}:
         try:
             files = sorted(f for f in os.listdir(folder)
@@ -756,6 +780,100 @@ def do_backup():
         except OSError:
             pass
     return dest
+
+
+BACKUP_EVENT = threading.Event()
+BACKUP_WORKER_LOCK = threading.Lock()
+BACKUP_STATUS = {"pending": False, "last_success": "", "last_error": "", "path": ""}
+CLOUD_BACKUP_STATUS = {"pending":False,"last_success":"","last_error":"اربط حساب hishammahmoud707@gmail.com لتفعيل نسخة قاعدة البيانات على Drive"}
+CLOUD_BACKUP_GENERATION = [0]
+BACKUP_GENERATION = [0]
+BACKUP_FIRST_DIRTY = [0.0]
+BACKUP_LAST_DIRTY = [0.0]
+
+
+def continuous_backup_dirty():
+    now = time.time()
+    if not BACKUP_STATUS["pending"]:
+        BACKUP_FIRST_DIRTY[0] = now
+    BACKUP_GENERATION[0] += 1
+    BACKUP_LAST_DIRTY[0] = now
+    BACKUP_STATUS["pending"] = True
+    BACKUP_EVENT.set()
+
+
+def continuous_backup_flush():
+    with BACKUP_WORKER_LOCK:
+        if not BACKUP_STATUS["pending"]:
+            return True
+        generation = BACKUP_GENERATION[0]
+        try:
+            dest = do_backup()
+            BACKUP_STATUS.update(last_success=now_str(),last_error="",path=dest)
+            CLOUD_BACKUP_STATUS["pending"]=True
+            CLOUD_BACKUP_GENERATION[0]+=1
+            if generation == BACKUP_GENERATION[0]:
+                BACKUP_STATUS["pending"] = False
+            _nixt_log("continuous local backup completed")
+            return True
+        except Exception as e:
+            BACKUP_STATUS["last_error"] = str(e)
+            _nixt_log("continuous backup FAILED: " + str(e))
+            return False
+
+
+def continuous_backup_worker():
+    while True:
+        BACKUP_EVENT.wait()
+        BACKUP_EVENT.clear()
+        while BACKUP_STATUS["pending"]:
+            now = time.time()
+            if now-BACKUP_LAST_DIRTY[0]<1 and now-BACKUP_FIRST_DIRTY[0]<5:
+                time.sleep(.1)
+                continue
+            if not continuous_backup_flush():
+                time.sleep(10)
+            elif BACKUP_STATUS["pending"]:
+                BACKUP_FIRST_DIRTY[0] = time.time()
+
+
+def cloud_backup_worker():
+    last_attempt=0.0
+    while True:
+        time.sleep(2)
+        if not CLOUD_BACKUP_STATUS["pending"]:
+            continue
+        if drive_sync is None or not drive_sync.full_backup_ready():
+            CLOUD_BACKUP_STATUS["last_error"]="اربط حساب hishammahmoud707@gmail.com لتفعيل نسخة قاعدة البيانات على Drive"
+            continue
+        if time.monotonic()-last_attempt<180:
+            continue
+        last_attempt=time.monotonic()
+        generation=CLOUD_BACKUP_GENERATION[0]
+        stable=os.path.join(BACKUP_DIR,"cloud-upload.tmp")
+        try:
+            with BACKUP_WORKER_LOCK:
+                path=BACKUP_STATUS["path"]
+                if not path or not os.path.isfile(path):
+                    continue
+                shutil.copyfile(path,stable)
+            drive_sync.upload_full_backup(stable)
+            CLOUD_BACKUP_STATUS.update(last_success=now_str(),last_error="")
+            if generation==CLOUD_BACKUP_GENERATION[0]:
+                CLOUD_BACKUP_STATUS["pending"]=False
+            _nixt_log("full private Drive database backup completed")
+        except Exception as e:
+            CLOUD_BACKUP_STATUS["last_error"]=str(e)
+            _nixt_log("full Drive backup FAILED: "+str(e))
+        finally:
+            try: os.remove(stable)
+            except OSError: pass
+
+
+DB_MUTATION_LOCK = threading.RLock()
+UPDATE_LOCK = threading.Lock()
+
+UPDATE_STATUS = {"stage":"idle","error":"","downloaded":0,"total":0}
 
 
 AUTO_BACKUP_STATE = {"date": ""}
@@ -1003,6 +1121,18 @@ def merge_remote_db(remote_path, remote_device=""):
     """Record-level merge of a remote snapshot DB into the local DB.
     Identity is the record uuid; the newer updated_at wins; deletions win via
     tombstones. A safety backup is always taken first."""
+    check=get_db()
+    has_stock=check.execute("SELECT 1 FROM stock_movements LIMIT 1").fetchone()
+    check.close()
+    remote=sqlite3.connect(remote_path)
+    try:
+        remote_stock=remote.execute("SELECT COUNT(*) FROM stock_movements").fetchone()[0]
+    except sqlite3.Error:
+        remote_stock=0
+    finally:
+        remote.close()
+    if has_stock or remote_stock:
+        raise RuntimeError("دمج جهازين غير متاح مع سجل المخزن. استخدم جهاز واحد أو استعادة نسخة كاملة بعد المراجعة")
     do_backup()
     stats = {"inserted": 0, "updated": 0, "deleted": 0, "renumbered": 0}
     pending_return = []
@@ -1335,6 +1465,43 @@ def do_sync_pull():
 
 
 # ---------------- API ----------------
+def stock_key(item):
+    return tuple(str(item.get(k) or "").strip() for k in ("item_name", "material_type", "color", "size", "unit"))
+
+
+def stock_balance(conn, key):
+    return float(conn.execute("SELECT COALESCE(SUM(quantity),0) FROM stock_movements WHERE item_name=? AND material_type=? AND color=? AND size=? AND unit=?", key).fetchone()[0])
+
+
+def validate_material_item(item):
+    for field in ("item_name","material_type","color","size","unit"):
+        item[field]=str(item.get(field) or "").strip()
+    kind = item.get("material_type") or ""
+    if kind not in ("leather", "sole", "other"):
+        raise ValueError("اختار نوع الخامة لكل سطر شراء")
+    if not str(item.get("item_name") or "").strip():
+        raise ValueError("اكتب اسم الخامة")
+    q = float(item.get("pairs") or 0)
+    price = float(item.get("price") or 0)
+    if not math.isfinite(q) or q <= 0 or not math.isfinite(price) or price < 0:
+        raise ValueError("راجع الكمية والسعر، لازم أرقام موجبة")
+    item["unit"] = "sqft" if kind == "leather" else "pair" if kind == "sole" else str(item.get("unit") or "").strip()
+    if not item["unit"]:
+        raise ValueError("اكتب وحدة الخامة")
+    if kind == "sole" and (not str(item.get("size") or "").strip() or not str(item.get("color") or "").strip() or not q.is_integer()):
+        raise ValueError("النعل لازم مقاس ولون وعدد أزواج صحيح")
+    if kind != "sole":
+        item["size"] = ""
+    return q
+
+
+def stock_post(conn, item, quantity, kind, date, reason, user, invoice_id=None, reverses_id=None):
+    key = stock_key(item)
+    if stock_balance(conn, key) + quantity < -0.0000001:
+        raise ValueError("الرصيد مش كفاية للصنف: " + key[0])
+    conn.execute("INSERT INTO stock_movements(item_name,material_type,color,size,unit,quantity,kind,date,reason,username,invoice_id,reverses_id,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", key + (quantity,kind,date,reason,(user or {}).get("username", ""),invoice_id,reverses_id,now_str()))
+
+
 class API:
     # ---------- auth ----------
     def me(q, user):
@@ -2056,6 +2223,56 @@ class API:
         conn.close()
         return 200, {"ok": True}
 
+    def stock_list(q, user):
+        if user.get("role") not in ("admin","warehouse","user"):
+            return 403,{"error":"صلاحية المخزن مطلوبة"}
+        perms=user.get("perms") or {}
+        if user.get("role") != "admin" and perms.get("sections") is not None and "inventory" not in perms["sections"]:
+            return 403,{"error":"صلاحية المخزن مطلوبة"}
+        conn = get_db()
+        balances = rows(conn.execute("SELECT item_name,material_type,color,size,unit,ROUND(SUM(quantity),6) quantity FROM stock_movements GROUP BY item_name,material_type,color,size,unit ORDER BY material_type,item_name,color,size"))
+        movements = rows(conn.execute("SELECT s.*,EXISTS(SELECT 1 FROM stock_movements r WHERE r.reverses_id=s.id) reversed FROM stock_movements s ORDER BY id DESC LIMIT 300"))
+        conn.close()
+        return 200, {"balances": balances, "movements": movements}
+
+    def stock_move(body, user):
+        if user.get("role") not in ("admin", "warehouse", "user"):
+            return 403,{"error":"صلاحية المخزن مطلوبة"}
+        perms=user.get("perms") or {}
+        if user.get("role") != "admin" and perms.get("sections") is not None and "inventory" not in perms["sections"]:
+            return 403,{"error":"صلاحية المخزن مطلوبة"}
+        conn = get_db()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            kind = body.get("kind")
+            reason = str(body.get("reason") or "").strip()
+            if not reason:
+                raise ValueError("اكتب سبب الحركة")
+            date = body.get("date") or datetime.now().strftime("%Y-%m-%d")
+            if kind == "reverse":
+                original = conn.execute("SELECT * FROM stock_movements WHERE id=?", (int(body.get("movement_id") or 0),)).fetchone()
+                if not original or original["invoice_id"] is not None or original["kind"] == "reverse":
+                    raise ValueError("حركات الفواتير تتصحح بمرتجع مرتبط، مش بإلغاء حركة المخزن")
+                if conn.execute("SELECT 1 FROM stock_movements WHERE reverses_id=?", (original["id"],)).fetchone():
+                    raise ValueError("الحركة دي متصححة قبل كده")
+                stock_post(conn, dict(original), -original["quantity"], kind, date, reason, user, reverses_id=original["id"])
+            elif kind in ("opening", "issue"):
+                item = dict(body)
+                q0 = validate_material_item(item)
+                if kind == "opening" and conn.execute("SELECT 1 FROM stock_movements WHERE item_name=? AND material_type=? AND color=? AND size=? AND unit=?",stock_key(item)).fetchone():
+                    raise ValueError("رصيد البداية للصنف ده اتسجل أو عليه حركات بالفعل")
+                stock_post(conn,item,q0 if kind=="opening" else -q0,kind,date,reason,user)
+            else:
+                raise ValueError("نوع حركة غير صحيح")
+            log_action(conn,user,"حركة مخزن",reason)
+            conn.commit()
+            return 200,{"ok":True}
+        except (ValueError,TypeError) as e:
+            conn.rollback()
+            return 400,{"error":str(e)}
+        finally:
+            conn.close()
+
     # ---------- invoices ----------
     def list_invoices(q, user):
         cid = q.get("customer_id", [""])[0]
@@ -2091,8 +2308,36 @@ class API:
         kind = body.get("kind", "sale")
         if kind not in INVOICE_KINDS:
             return 400, {"error": "نوع غير صحيح"}
+        if kind in ("purchase", "purchase_return"):
+            try:
+                if not body.get("items"):
+                    raise ValueError("أضف خامة واحدة على الأقل")
+                for item in body["items"]:
+                    validate_material_item(item)
+            except (ValueError,TypeError) as e:
+                return 400,{"error":str(e)}
         idate = body.get("date") or datetime.now().strftime("%Y-%m-%d")
         conn = get_db()
+        conn.execute("BEGIN IMMEDIATE")
+        if kind == "purchase_return":
+            needed = {}
+            for item in body["items"]:
+                key = stock_key(item)
+                needed[key] = needed.get(key,0) + float(item["pairs"])
+            original_id = int(body.get("return_of") or 0)
+            original = conn.execute("SELECT customer_id,kind,stock_posted FROM invoices WHERE id=?",(original_id,)).fetchone()
+            if not original or original["kind"] != "purchase" or original["customer_id"] != int(cid) or not original["stock_posted"]:
+                conn.rollback();conn.close()
+                return 400,{"error":"مرتجع المخزن لازم يرتبط بفاتورة شراء جديدة لنفس المورد"}
+            for key, quantity in needed.items():
+                received = float(conn.execute("SELECT COALESCE(SUM(quantity),0) FROM stock_movements WHERE invoice_id=? AND item_name=? AND material_type=? AND color=? AND size=? AND unit=?",(original_id,)+key).fetchone()[0])
+                returned = float(conn.execute("SELECT COALESCE(-SUM(s.quantity),0) FROM stock_movements s JOIN invoices i ON i.id=s.invoice_id WHERE i.return_of=? AND s.item_name=? AND s.material_type=? AND s.color=? AND s.size=? AND s.unit=?",(original_id,)+key).fetchone()[0])
+                if quantity > received - returned + 0.0000001:
+                    conn.rollback();conn.close()
+                    return 400,{"error":"كمية المرتجع أكبر من المتبقي في فاتورة الشراء: " + key[0]}
+                if stock_balance(conn,key) < quantity - 0.0000001:
+                    conn.rollback();conn.close()
+                    return 400,{"error":"الرصيد مش كفاية لمرتجع الصنف: " + key[0]}
         if month_is_closed(conn, idate):
             conn.close()
             return 400, {"error": "شهر " + idate[:7] + " متقفل - افتحه من تاب التقارير لو محتاج تسجل فيه"}
@@ -2109,7 +2354,6 @@ class API:
                              "need_approval": True, "limit": lim}
             log_action(conn, user, "خصم كبير بموافقة مدير",
                        "خصم %s - وافق %s" % (round(disc, 2), approver))
-            conn.commit()
         last = conn.execute("SELECT number FROM invoices WHERE kind=? AND number != '' "
                             "ORDER BY id DESC LIMIT 1", (kind,)).fetchone()
         seq = 1
@@ -2157,9 +2401,17 @@ class API:
                 price = float(it.get("price") or 0)
                 retail = None
             conn.execute(
-                "INSERT INTO invoice_items (invoice_id, item_name, color, pairs, price, retail_price) VALUES (?,?,?,?,?,?)",
+                "INSERT INTO invoice_items (invoice_id, item_name, color, pairs, price, retail_price, material_type, unit, size) VALUES (?,?,?,?,?,?,?,?,?)",
                 (iid, it["item_name"].strip(), it.get("color", ""),
-                 float(it.get("pairs") or 0), price, retail))
+                 float(it.get("pairs") or 0), price, retail,
+                 (it.get("material_type") or "") if kind in ("purchase", "purchase_return") else "",
+                 it.get("unit", "pair") if kind in ("purchase", "purchase_return") else "pair",
+                 str(it.get("size") or "") if kind in ("purchase", "purchase_return") and it.get("material_type") == "sole" else ""))
+        if kind in ("purchase", "purchase_return"):
+            for item in body["items"]:
+                quantity = float(item["pairs"]) * (1 if kind == "purchase" else -1)
+                stock_post(conn,item,quantity,kind,idate,body.get("reason") or number,user,invoice_id=iid)
+            conn.execute("UPDATE invoices SET stock_posted=1 WHERE id=?",(iid,))
         net0 = invoice_net(iid, conn)
         log_action(conn, user, "فاتورة جديدة" if kind in ("sale", "purchase") else "مرتجع جديد",
                    "رقم %s - صافي %s" % (number, round(net0, 2)))
@@ -2231,7 +2483,10 @@ class API:
 
     def delete_invoice(iid, user=None, approver=""):
         conn = get_db()
-        inv = conn.execute("SELECT number FROM invoices WHERE id=?", (iid,)).fetchone()
+        inv = conn.execute("SELECT number,stock_posted FROM invoices WHERE id=?", (iid,)).fetchone()
+        if inv and inv["stock_posted"]:
+            conn.close()
+            return 400,{"error":"الفاتورة مرتبطة بحركات مخزن، صححها بمرتجع مرتبط للحفاظ على السجل"}
         conn.execute("DELETE FROM invoice_items WHERE invoice_id=?", (iid,))
         conn.execute("DELETE FROM invoices WHERE id=?", (iid,))
         note = (inv["number"] or ("#%d" % iid)) if inv else ("#%d" % iid)
@@ -2562,20 +2817,43 @@ class API:
                      "notes": info.get("notes", ""), "has_zip": bool(info.get("zip_url"))}
 
     def do_update(body, user):
+        if not UPDATE_LOCK.acquire(blocking=False):
+            return 409,{"error":"تحديث شغال بالفعل"}
+        accepted=False
+        try:
+            result=API._do_update(body,user)
+            accepted=result[0]==200
+            return result
+        except Exception as e:
+            UPDATE_STATUS.update(stage="error",error=str(e))
+            _nixt_log("update failed: "+str(e))
+            return 500,{"error":"فشل تجهيز التحديث: "+str(e)}
+        finally:
+            if not accepted:
+                UPDATE_LOCK.release()
+
+    def _do_update(body, user):
+        UPDATE_STATUS.update(stage="checking",error="")
+        _nixt_log("update: checking release")
         info, kind, detail = fetch_update_info()
         if info is None:
             return 400, {"error": UPDATE_ERROR_KIND.get(kind, "تعذر الاتصال بخادم التحديثات")}
         latest = str(info.get("version", ""))
         if not (version_tuple(latest) > version_tuple(APP_VERSION)):
             return 400, {"error": "no newer version"}
+        if not re.fullmatch(r"[0-9]+(?:\.[0-9]+){1,3}",latest):
+            return 400,{"error":"رقم إصدار غير صحيح"}
         zip_url = info.get("zip_url")
         if not zip_url:
             return 400, {"error": "no zip url"}
-        # safety: backup the database before touching anything
+        # Never apply an update without a verified safety backup.
         try:
+            UPDATE_STATUS["stage"]="backup"
             do_backup()
-        except Exception:
-            pass
+        except Exception as e:
+            UPDATE_STATUS.update(stage="error",error=str(e))
+            _nixt_log("update backup failed: " + str(e))
+            return 500,{"error":"فشل النسخ الاحتياطي قبل التحديث: " + str(e)}
         os.makedirs(UPDATES_DIR, exist_ok=True)
         # clean old update packages
         for fn in os.listdir(UPDATES_DIR):
@@ -2586,8 +2864,31 @@ class API:
                     pass
         zip_path = os.path.join(UPDATES_DIR, "nixt-update-%s.zip" % latest)
         req = urllib.request.Request(zip_url, headers={"User-Agent": "NixtAccounts/" + APP_VERSION})
-        with urllib.request.urlopen(req, timeout=120) as r, open(zip_path, "wb") as f:
-            shutil.copyfileobj(r, f)
+        UPDATE_STATUS.update(stage="download",downloaded=0)
+        _nixt_log("update: downloading " + latest)
+        started=time.monotonic()
+        try:
+            with urllib.request.urlopen(req, timeout=20) as r, open(zip_path,"wb") as f:
+                UPDATE_STATUS["total"]=int(r.headers.get("Content-Length") or 0)
+                while True:
+                    chunk=r.read(65536)
+                    if not chunk: break
+                    f.write(chunk)
+                    UPDATE_STATUS["downloaded"]+=len(chunk)
+                    if time.monotonic()-started>180:
+                        raise TimeoutError("download exceeded 3 minutes")
+        except Exception as e:
+            UPDATE_STATUS.update(stage="error",error=str(e))
+            _nixt_log("update download failed: " + str(e))
+            return 500,{"error":"تحميل التحديث فشل: " + str(e)}
+        expected_hash=str(info.get("sha256") or "").lower()
+        if expected_hash:
+            with open(zip_path,"rb") as package:
+                actual_hash=hashlib.sha256(package.read()).hexdigest()
+            if not hmac.compare_digest(expected_hash,actual_hash):
+                raise ValueError("بصمة ملف التحديث غير مطابقة")
+        UPDATE_STATUS["stage"]="extract"
+        _nixt_log("update: extracting package")
         staging = os.path.join(UPDATES_DIR, "extract-%s" % latest)
         if os.path.exists(staging):
             shutil.rmtree(staging, ignore_errors=True)
@@ -2603,7 +2904,9 @@ class API:
                 low = rel.replace("\\", "/").lower()
                 if low.startswith("data/") or low.startswith("backups/") or low == "data" or low == "backups":
                     continue
-                dest = os.path.join(staging, rel.replace("/", os.sep))
+                dest = os.path.abspath(os.path.join(staging,rel.replace("/",os.sep)))
+                if os.path.commonpath([os.path.abspath(staging),dest]) != os.path.abspath(staging):
+                    raise ValueError("unsafe update archive path")
                 os.makedirs(os.path.dirname(dest), exist_ok=True)
                 with z.open(n) as srcf, open(dest, "wb") as outf:
                     shutil.copyfileobj(srcf, outf)
@@ -2616,18 +2919,27 @@ class API:
         log_path = os.path.join(os.path.dirname(DATA_DIR), "update-log.txt")
         bat = build_update_bat(old_dir)
 
+        new_start = os.path.join(old_dir,"START.bat")
+        UPDATE_STATUS["stage"]="handoff"
+        _nixt_log("update: package ready; scheduling Windows handoff")
         def _handoff():
             try:
+                if not continuous_backup_flush():
+                    raise RuntimeError("فشل حفظ نسخة أمان قبل إعادة التشغيل")
                 env = dict(os.environ)
-                env["NIXT_STAGING"] = staging
-                env["NIXT_OLD"] = old_dir
-                env["NIXT_START"] = new_start
-                env["NIXT_LOG"] = log_path
-                env["NIXT_UPDIR"] = UPDATES_DIR
-                subprocess.Popen(["cmd", "/c", "start", "Nixt Update", "cmd", "/c", '"%s"' % bat],
-                                 cwd=os.environ.get("TEMP") or BASE_DIR, env=env)
-            except Exception:
-                pass
+                env.update(NIXT_STAGING=staging,NIXT_OLD=old_dir,NIXT_START=new_start,
+                           NIXT_LOG=log_path,NIXT_UPDIR=UPDATES_DIR,NIXT_PID=str(os.getpid()))
+                subprocess.Popen(["cmd.exe","/d","/c",bat],cwd=os.environ.get("TEMP") or BASE_DIR,
+                                 env=env,creationflags=getattr(subprocess,"CREATE_NEW_CONSOLE",0))
+                _nixt_log("update: Windows handoff process started; exiting app")
+            except Exception as e:
+                import traceback
+                UPDATE_STATUS.update(stage="error",error=str(e))
+                _nixt_log("update handoff FAILED:\n"+traceback.format_exc())
+                show_message("Update could not start. The app is still running.\n"+str(e))
+                if UPDATE_LOCK.locked():
+                    UPDATE_LOCK.release()
+                return
             os._exit(0)
 
         threading.Timer(1.0, _handoff).start()
@@ -2643,6 +2955,11 @@ class API:
         return 200, {"log": txt}
 
     def wipe(body, user):
+        check=get_db()
+        has_stock=check.execute("SELECT 1 FROM stock_movements LIMIT 1").fetchone()
+        check.close()
+        if has_stock:
+            return 400,{"error":"فيه سجل مخزن مرتبط بالبيانات. التصفير غير متاح للحفاظ على تطابق المخزن والحسابات"}
         if (body.get("confirm") or "").strip() != "تصفير":
             return 400, {"error": "اكتب كلمة تصفير في الخانة الأول"}
         try:
@@ -3164,6 +3481,17 @@ class API:
         out = sorted(seen.values(), key=lambda x: x["file"], reverse=True)
         return 200, {"backups": out[:30], "dir": backup_dir_effective()}
 
+    def restore_cloud_backup(body,user):
+        if drive_sync is None:
+            return 400,{"error":"Google Drive غير متاح"}
+        name="nixt-cloud-download-"+datetime.now().strftime("%Y%m%d-%H%M%S-%f")+".db"
+        path=os.path.join(BACKUP_DIR,name)
+        try:
+            drive_sync.download_full_backup(str(body.get("file_id") or ""),path)
+            return API.restore_backup({"file":name},user)
+        except Exception as e:
+            return 400,{"error":str(e)}
+
     def restore_backup(body, user):
         fname = os.path.basename(body.get("file") or "")
         if not fname.startswith("nixt-") or not fname.endswith(".db"):
@@ -3179,17 +3507,33 @@ class API:
         try:
             check = sqlite3.connect(src_path)
             check.execute("SELECT COUNT(*) FROM customers").fetchone()
+            if check.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+                raise sqlite3.DatabaseError("integrity check failed")
             check.close()
         except sqlite3.Error:
             return 400, {"error": "ملف النسخة تالف"}
-        safety = do_backup()
-        src_conn = sqlite3.connect(src_path)
-        dst_conn = get_db()
-        src_conn.backup(dst_conn)
-        src_conn.close()
-        log_action(dst_conn, user, "استعادة نسخة احتياطية", fname)
-        dst_conn.commit()
-        dst_conn.close()
+        # Serialize app writes and backup rotation while replacing the DB.
+        # Stage the selected snapshot first: retention must not remove it.
+        import tempfile
+        fd,staged=tempfile.mkstemp(prefix="nixt-restore-",suffix=".db")
+        os.close(fd)
+        try:
+            with DB_MUTATION_LOCK, BACKUP_WORKER_LOCK:
+                shutil.copyfile(src_path,staged)
+                safety=do_backup()
+                src_conn=sqlite3.connect(staged)
+                dst_conn=get_db()
+                try:
+                    src_conn.backup(dst_conn)
+                    log_action(dst_conn,user,"استعادة نسخة احتياطية",fname)
+                    dst_conn.commit()
+                finally:
+                    src_conn.close()
+                    dst_conn.close()
+                init_db()
+        finally:
+            try: os.remove(staged)
+            except OSError: pass
         return 200, {"ok": True, "restored": fname, "safety_backup": os.path.basename(safety)}
 
     # ---------- price lists ----------
@@ -3789,6 +4133,7 @@ def build_snapshot_bytes():
     parts = {}
     for key, fn in (("bootstrap", API.mobile_bootstrap),
                     ("dashboard", API.dashboard),
+                    ("stock", API.stock_list),
                     ("customers", API.list_customers),
                     ("invoices", API.list_invoices),
                     ("today", API.today),
@@ -3833,6 +4178,7 @@ def drive_callback_html(q):
 # ---------------- routes ----------------
 # path -> (handler, needs_admin)
 ROUTES_POST = {
+    "/api/stock/move": (lambda b,u: API.stock_move(b,u),False),
     "/api/setup": (lambda b, u: API.setup(b, u), False),
     "/api/login": (lambda b, u: API.login(b, u), False),
     "/api/logout": (lambda b, u: API.logout(b, u), False),
@@ -3859,6 +4205,7 @@ ROUTES_POST = {
     "/api/monthly-close": (lambda b, u: API.monthly_close(b, u), True),
     "/api/quotations": (lambda b, u: API.create_quote(b, u), False),
     "/api/restore": (lambda b, u: API.restore_backup(b, u), True),
+    "/api/cloud-restore": (lambda b,u:API.restore_cloud_backup(b,u),True),
     "/api/monthly-open": (lambda b, u: API.monthly_open(b, u), True),
     "/api/sync/pull": (lambda b, u: API.sync_pull(b, u), True),
     "/api/mobile/config": (lambda b, u: API.mobile_config_save(b, u), True),
@@ -3870,6 +4217,9 @@ ROUTES_POST = {
     "/api/mobile/lock": (lambda b, u: API.mobile_lock(b, u), False),
 }
 ROUTES_GET = {
+    "/api/stock": (API.stock_list,False),
+    "/api/backup-status": (lambda q,u: (200,dict(BACKUP_STATUS,cloud=dict(CLOUD_BACKUP_STATUS))),False),
+    "/api/cloud-backups": (lambda q,u: (200,{"backups":drive_sync.list_full_backups() if drive_sync else []}),True),
     "/api/me": (API.me, False),
     "/api/login_users": (API.login_users, False),
     "/api/version": (lambda q, u: API.version(q), False),
@@ -3899,6 +4249,7 @@ ROUTES_GET = {
     "/api/mobile/config": (API.mobile_config, True),
     "/api/parties/next-code": (API.party_next_code, True),
     "/api/update-log": (API.update_log, True),
+    "/api/update-progress": (lambda q,u:(200,dict(UPDATE_STATUS)),True),
     "/api/drive/status": (API.drive_status, True),
     "/api/backups": (API.list_backups, True),
     "/api/collections": (API.collections, False),
@@ -4095,6 +4446,10 @@ class Handler(BaseHTTPRequestHandler):
             self._send(500, {"error": str(e)})
 
     def do_POST(self):
+        with DB_MUTATION_LOCK:
+            self._do_POST()
+
+    def _do_POST(self):
         u = urlparse(self.path)
         REQ.ua = self.headers.get("User-Agent") or ""
         REQ.ip = self.client_address[0] if self.client_address else ""
@@ -4183,6 +4538,10 @@ class Handler(BaseHTTPRequestHandler):
             self._send(500, {"error": str(e)})
 
     def do_DELETE(self):
+        with DB_MUTATION_LOCK:
+            self._do_DELETE()
+
+    def _do_DELETE(self):
         u = urlparse(self.path)
         REQ.ua = self.headers.get("User-Agent") or ""
         REQ.ip = self.client_address[0] if self.client_address else ""
@@ -4243,9 +4602,7 @@ def build_update_bat(old_dir):
     formatting (a literal %VAR% in the template crashes formatting - this
     exact bug broke 2.7.0's updater)."""
     bat = os.path.join(old_dir, "nixt-apply-update.bat")
-    kill = ('for /f "tokens=5" %%a in (\'netstat -ano ^| findstr /C:":'
-            + str(PORT) + ' " ^| findstr /C:"LISTENING"\') '
-            'do taskkill /F /PID %%a >>"%NIXT_LOG%" 2>&1')
+    kill = 'taskkill /F /PID %NIXT_PID% >>"%NIXT_LOG%" 2>&1'
     bat_lines = [
         '@echo off',
         'title Nixt Update',
@@ -4257,13 +4614,20 @@ def build_update_bat(old_dir):
         'ping -n 2 127.0.0.1 >nul',
         'echo Copying new files...',
         'robocopy "%NIXT_STAGING%" "%NIXT_OLD%" /E /IS /NFL /NDL /NJH /R:2 /W:1 >>"%NIXT_LOG%" 2>&1',
+        'if errorlevel 8 goto failed',
         'echo Restarting...',
-        'start "" "%NIXT_START%"',
+        'start "" /D "%NIXT_OLD%" "%NIXT_OLD%\\python\\pythonw.exe" "%NIXT_OLD%\\app.py"',
+        'if errorlevel 1 goto failed',
         'ping -n 3 127.0.0.1 >nul',
         'rmdir /s /q "%NIXT_STAGING%" >>"%NIXT_LOG%" 2>&1',
         'rmdir /s /q "%NIXT_UPDIR%" >>"%NIXT_LOG%" 2>&1',
         'echo === update done %date% %time% ===>>"%NIXT_LOG%"',
         '(goto) 2>nul & del "%~f0"',
+        ':failed',
+        'echo Update failed. Files preserved for recovery.>>"%NIXT_LOG%"',
+        'echo Update failed. Run the latest NixtSetup installer. See update-log.txt in your Nixt data folder.',
+        'pause',
+        'exit /b 1',
     ]
     with open(bat, "w", newline="") as f:
         f.write("\r\n".join(bat_lines) + "\r\n")
@@ -4541,6 +4905,8 @@ def _main():
     try:
         init_db()
         _nixt_log("init_db ok")
+        threading.Thread(target=continuous_backup_worker,daemon=True).start()
+        threading.Thread(target=cloud_backup_worker,daemon=True).start()
     except Exception:
         import traceback as _tb
         _nixt_log("init_db FAILED:\n" + _tb.format_exc())
@@ -4622,6 +4988,7 @@ def _main():
         pass
     finally:
         server.server_close()
+        continuous_backup_flush()
         sync_on_shutdown()
 
 
