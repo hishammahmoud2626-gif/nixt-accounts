@@ -1,6 +1,6 @@
 {
-  "version": "2.9.4",
-  "zip_url": "https://github.com/hishammahmoud2626-gif/nixt-accounts/releases/download/v2.9.4/NixtAccounts-2.9.4-Portable.zip",
-  "sha256": "6872a96357d2b303158f404d96104aa7483efa4e97291b1ed1e8998e6e7af1c7",
-  "notes": "شراء الخامات والمخزن + نسخ احتياطي محلي تلقائي + نسخة Drive كاملة بعد إعادة الربط + إصلاح التحديث. جهاز كتابة واحد، والفواتير القديمة لا تغير المخزن."
+  "version": "2.9.5",
+  "zip_url": "https://github.com/hishammahmoud2626-gif/nixt-accounts/releases/download/v2.9.5/NixtAccounts-2.9.5-Portable.zip",
+  "sha256": "72de95b61aa8f4d0a65c1a4b47544008cb835fbaadbdfd792a919b8cc54c3ee0",
+  "notes": "نقل أزرار النسخ الاحتياطي وحالة النسخ ونسخ Drive إلى الإعدادات فقط. النسخ التلقائي مستمر بدون تغيير."
 }
