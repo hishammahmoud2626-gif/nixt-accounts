@@ -36,7 +36,7 @@ try:
 except Exception:
     drive_sync = None
 
-APP_VERSION = "2.5.0"
+APP_VERSION = "2.6.0"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -3826,6 +3826,9 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/manifest.json":
                 return self._send_file(os.path.join(STATIC_DIR, "manifest.json"),
                                        "application/manifest+json; charset=utf-8")
+            if path == "/favicon.ico":
+                return self._send_file(os.path.join(STATIC_DIR, "favicon.ico"),
+                                       "image/x-icon")
             if path == "/sw.js":
                 return self._send_file(os.path.join(STATIC_DIR, "sw.js"),
                                        "application/javascript")
