@@ -37,7 +37,7 @@ try:
 except Exception:
     drive_sync = None
 
-APP_VERSION = "2.9.2"
+APP_VERSION = "2.9.3"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -4322,23 +4322,61 @@ def open_app_window():
     if not candidates:
         return None
     args = [candidates[0], "--app=" + url, "--disable-features=Translate"]
-    wmax, wsize = "", ""
+    # Always maximize. Saved browser geometry and old window_size settings
+    # must not override the owner's always-maximized preference.
+    args.append("--start-maximized")
     try:
-        conn = get_db()
-        wmax = get_setting(conn, "window_max", "")
-        wsize = get_setting(conn, "window_size", "")
-        conn.close()
-    except Exception:
-        pass
-    m = re.match(r"^(\d{3,4})x(\d{3,4})$", wsize or "")
-    if wmax == "1" or not m:
-        args.append("--start-maximized")
-    else:
-        args.append("--window-size=%s,%s" % (m.group(1), m.group(2)))
-    try:
-        return subprocess.Popen(args)
+        process = subprocess.Popen(args)
+        threading.Thread(target=maximize_nixt_window, daemon=True).start()
+        return process
     except Exception:
         return None
+
+
+def maximize_nixt_window():
+    """Edge can reuse an existing process and ignore its launch flag.
+    Maximize only a Chromium window with this app's exact document title.
+    Bounded retry accommodates the time it takes to create that window.
+    """
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        user32.EnumWindows.argtypes = [callback_type, wintypes.LPARAM]
+        user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+        user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+        user32.IsWindowVisible.argtypes = [wintypes.HWND]
+        user32.ShowWindowAsync.argtypes = [wintypes.HWND, ctypes.c_int]
+        user32.IsZoomed.argtypes = [wintypes.HWND]
+        expected_title = "نيكست للحسابات - NIXT"
+        for attempt in range(24):
+            found = []
+            @callback_type
+            def visit(hwnd, unused):
+                if not user32.IsWindowVisible(hwnd):
+                    return True
+                title = ctypes.create_unicode_buffer(512)
+                klass = ctypes.create_unicode_buffer(128)
+                user32.GetWindowTextW(hwnd, title, len(title))
+                user32.GetClassNameW(hwnd, klass, len(klass))
+                # Chromium may append its browser name to the document title.
+                if (title.value == expected_title or title.value.startswith(expected_title + " - ")) and klass.value == "Chrome_WidgetWin_1":
+                    found.append(hwnd)
+                return True
+            user32.EnumWindows(visit, 0)
+            if found:
+                for hwnd in found:
+                    user32.ShowWindowAsync(hwnd, 3)  # SW_MAXIMIZE, not fullscreen
+                _nixt_log("maximize requested for Nixt window")
+                return
+            time.sleep(0.25)
+        _nixt_log("maximize: no matching Nixt window found within 6 seconds")
+    except Exception:
+        import traceback
+        _nixt_log("maximize failed (launch continues):\n" + traceback.format_exc())
 
 
 def open_browser():
