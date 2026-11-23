@@ -1,5 +1,5 @@
 {
-  "version": "2.9.1",
-  "zip_url": "https://github.com/hishammahmoud2626-gif/nixt-accounts/releases/download/v2.9.1/NixtAccounts-2.9.1-Portable.zip",
-  "notes": "إصلاح مشكلة الشاشة البيضاء عند التشغيل: سجل تشخيص كامل في AppData\\NixtAccounts\\logs\\nixt.log مع فحص ذاتي للسيرفر، ومربع خطأ واضح لو حصل عطل. والمثبّت بيقفل أي نسخة شغالة من البرنامج ويستنى قفلتها قبل ما ينسخ الملفات."
+  "version": "2.9.2",
+  "zip_url": "https://github.com/hishammahmoud2626-gif/nixt-accounts/releases/download/v2.9.2/NixtAccounts-2.9.2-Portable.zip",
+  "notes": "إصلاح import re الناقص اللي عطّل فتح النافذة. فتح آمن للنافذة مع متصفح بديل، وإغلاق السيرفر لو فتح النافذة فشل. المثبّت بيقفل Nixt بس وبيحافظ على البيانات."
 }
