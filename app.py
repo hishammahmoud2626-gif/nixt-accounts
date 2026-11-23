@@ -38,7 +38,7 @@ try:
 except Exception:
     drive_sync = None
 
-APP_VERSION = "2.9.4"
+APP_VERSION = "2.9.5"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
