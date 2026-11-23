@@ -36,7 +36,7 @@ try:
 except Exception:
     drive_sync = None
 
-APP_VERSION = "2.7.0"
+APP_VERSION = "2.8.0"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -322,6 +322,9 @@ DEFAULT_SETTINGS = {
     "device_name": "",
     "wholesale_divisor": "1.22",
     "idle_lock_minutes": "5",
+    "window_size": "",
+    "window_max": "",
+    "shortcut_dismissed": "",
     "approval_discount_limit": "200",
     "colors": "أسود,بني,هافان,أبيض,كحلي,رمادي,تانجو",
 }
@@ -1757,6 +1760,56 @@ class API:
             else:
                 threading.Thread(target=sync_lock_heartbeat, daemon=True).start()
         return 200, {"ok": True}
+
+    def window_size(body, user):
+        try:
+            w = int(body.get("w") or 0)
+            h = int(body.get("h") or 0)
+        except (TypeError, ValueError):
+            return 400, {"error": "مقاس غير صحيح"}
+        if body.get("max"):
+            val, mx = "", "1"
+        elif 400 <= w <= 7680 and 400 <= h <= 4320:
+            val, mx = "%dx%d" % (w, h), "0"
+        else:
+            return 400, {"error": "مقاس غير صحيح"}
+        conn = get_db()
+        conn.execute("INSERT INTO settings (key, value) VALUES ('window_size', ?) "
+                     "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (val,))
+        conn.execute("INSERT INTO settings (key, value) VALUES ('window_max', ?) "
+                     "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (mx,))
+        conn.commit()
+        conn.close()
+        return 200, {"ok": True}
+
+    def shortcut_status(q, user):
+        lnk = os.path.join(desktop_path(), "Nixt.lnk")
+        return 200, {"windows": os.name == "nt",
+                     "exists": os.path.isfile(lnk), "path": lnk}
+
+    def create_shortcut(body, user):
+        if os.name != "nt":
+            return 400, {"error": "الميزة دي شغالة على ويندوز بس"}
+        lnk = os.path.join(desktop_path(), "Nixt.lnk")
+        ps1 = os.path.join(DATA_DIR, "create_shortcut.ps1")
+        try:
+            with open(ps1, "wb") as f:
+                f.write(SHORTCUT_PS1.encode("ascii"))
+            env = os.environ.copy()
+            env["NIXT_SC_TARGET"] = os.path.join(BASE_DIR, "START.bat")
+            env["NIXT_SC_DIR"] = BASE_DIR
+            env["NIXT_SC_ICON"] = os.path.join(BASE_DIR, "logo.ico")
+            subprocess.run(["powershell.exe", "-NoProfile", "-ExecutionPolicy",
+                            "Bypass", "-WindowStyle", "Hidden", "-File", ps1],
+                           env=env, capture_output=True, timeout=30)
+        except Exception as e:
+            return 500, {"error": "فشل إنشاء الاختصار: %s" % e}
+        if os.path.isfile(lnk):
+            conn = get_db()
+            log_action(conn, user, "إنشاء اختصار سطح المكتب", lnk)
+            conn.close()
+            return 200, {"ok": True, "path": lnk}
+        return 500, {"error": "فشل إنشاء الاختصار - جرّب ملف إنشاء-اختصار-سطح-المكتب.bat جنب البرنامج"}
 
     # ---------- mobile ----------
     def mobile_bootstrap(q, user):
@@ -3767,6 +3820,8 @@ ROUTES_POST = {
     "/api/payments": (lambda b, u: API.create_payment(b, u), False),
     "/api/backup": (lambda b, u: API.backup({}, u), False),
     "/api/settings": (lambda b, u: API.save_settings(b, u), True),
+    "/api/window-size": (lambda b, u: API.window_size(b, u), False),
+    "/api/create-shortcut": (lambda b, u: API.create_shortcut(b, u), False),
     "/api/users": (lambda b, u: API.create_user(b, u), True),
     "/api/import/parties": (lambda b, u: api_import_parties(b, u), True),
     "/api/do-update": (lambda b, u: API.do_update(b, u), True),
@@ -3802,6 +3857,7 @@ ROUTES_GET = {
     "/api/statement": (API.statement, False),
     "/api/dashboard": (API.dashboard, False),
     "/api/settings": (API.get_settings, False),
+    "/api/shortcut-status": (API.shortcut_status, False),
     "/api/sync/status": (API.sync_status, True),
     "/api/treasury": (API.list_treasury, False),
     "/api/cheques": (API.list_cheques, False),
@@ -4154,6 +4210,34 @@ def port_busy():
         s.close()
 
 
+def desktop_path():
+    """Real Desktop folder (handles OneDrive redirection)."""
+    if os.name == "nt":
+        try:
+            import winreg
+            k = winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                               r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders")
+            v, _ = winreg.QueryValueEx(k, "Desktop")
+            winreg.CloseKey(k)
+            return os.path.expandvars(v)
+        except Exception:
+            pass
+    return os.path.join(os.path.expanduser("~"), "Desktop")
+
+
+SHORTCUT_PS1 = (
+    "$ErrorActionPreference = 'Stop'\r\n"
+    "$ws = New-Object -ComObject WScript.Shell\r\n"
+    "$lnk = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Nixt.lnk'\r\n"
+    "$sc = $ws.CreateShortcut($lnk)\r\n"
+    "$sc.TargetPath = $env:NIXT_SC_TARGET\r\n"
+    "$sc.WorkingDirectory = $env:NIXT_SC_DIR\r\n"
+    "$sc.IconLocation = $env:NIXT_SC_ICON + ',0'\r\n"
+    "$sc.Description = 'Nixt Accounts'\r\n"
+    "$sc.Save()\r\n"
+)
+
+
 APP_WINDOW_BROWSERS = [
     r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
     r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
@@ -4177,8 +4261,22 @@ def open_app_window():
                 break
     if not candidates:
         return None
+    args = [candidates[0], "--app=" + url, "--disable-features=Translate"]
+    wmax, wsize = "", ""
     try:
-        return subprocess.Popen([candidates[0], "--app=" + url])
+        conn = get_db()
+        wmax = get_setting(conn, "window_max", "")
+        wsize = get_setting(conn, "window_size", "")
+        conn.close()
+    except Exception:
+        pass
+    m = re.match(r"^(\d{3,4})x(\d{3,4})$", wsize or "")
+    if wmax == "1" or not m:
+        args.append("--start-maximized")
+    else:
+        args.append("--window-size=%s,%s" % (m.group(1), m.group(2)))
+    try:
+        return subprocess.Popen(args)
     except Exception:
         return None
 
