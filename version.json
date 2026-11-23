@@ -1,6 +1,6 @@
 {
-  "version": "2.9.7",
-  "zip_url": "https://github.com/hishammahmoud2626-gif/nixt-accounts/releases/download/v2.9.7/NixtAccounts-2.9.7-Portable.zip",
-  "sha256": "a97df54fc19126093ef5db4085d1b8fd36d8889ba8e03c0b9f051101487b9275",
-  "notes": "جرس تنبيهات محلي للشيكات والمديونيات ومحاولات المخزون بالسالب والنسخ الاحتياطي والتحديثات، مع صلاحيات وتعليم كمقروء لكل مستخدم."
+  "version": "2.10.0",
+  "zip_url": "https://github.com/hishammahmoud2626-gif/nixt-accounts/releases/download/v2.10.0/NixtAccounts-2.10.0-Portable.zip",
+  "sha256": "c051ac51f8661eef7cffdc0d2c04caa9c41bf0db2829a7e1b26957233ef86b57",
+  "notes": "تصميم جديد داكن بالبرتقالي، صفحات ونماذج مدمجة، خط عربي محلي، ومراجعة عرض الموبايل والطباعة. نفس البيانات والحسابات."
 }
