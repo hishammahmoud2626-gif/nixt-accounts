@@ -36,7 +36,7 @@ try:
 except Exception:
     drive_sync = None
 
-APP_VERSION = "2.3.0"
+APP_VERSION = "2.4.0"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -302,6 +302,12 @@ MIGRATIONS = [
     ("invoices", "return_of", "ALTER TABLE invoices ADD COLUMN return_of INTEGER"),
     ("payments", "vcash", "ALTER TABLE payments ADD COLUMN vcash REAL DEFAULT 0"),
     ("treasury", "method", "ALTER TABLE treasury ADD COLUMN method TEXT DEFAULT 'cash'"),
+    ("users", "pin_hash", "ALTER TABLE users ADD COLUMN pin_hash TEXT DEFAULT ''"),
+    ("users", "locked_until", "ALTER TABLE users ADD COLUMN locked_until TEXT DEFAULT ''"),
+    ("users", "must_change", "ALTER TABLE users ADD COLUMN must_change INTEGER DEFAULT 0"),
+    ("users", "disabled", "ALTER TABLE users ADD COLUMN disabled INTEGER DEFAULT 0"),
+    ("users", "last_login", "ALTER TABLE users ADD COLUMN last_login TEXT DEFAULT ''"),
+    ("users", "perms", "ALTER TABLE users ADD COLUMN perms TEXT DEFAULT ''"),
 ]
 
 DEFAULT_SETTINGS = {
@@ -314,6 +320,7 @@ DEFAULT_SETTINGS = {
     "sync_dir": "",
     "device_name": "",
     "wholesale_divisor": "1.22",
+    "idle_lock_minutes": "5",
     "colors": "أسود,بني,هافان,أبيض,كحلي,رمادي,تانجو",
 }
 
@@ -688,16 +695,23 @@ LOGIN_LOCK = threading.Lock()
 
 
 def login_throttle_check(uname):
+    return login_throttle_wait(uname) > 0
+
+
+def login_throttle_wait(uname):
     with LOGIN_LOCK:
         fails, locked_until = LOGIN_FAILS.get(uname.lower(), (0, 0.0))
-        return time.time() < locked_until
+        return max(0, int(locked_until - time.time()))
+
+
+LOGIN_LOCK_MINUTES = 5
 
 
 def login_throttle_fail(uname):
     with LOGIN_LOCK:
         fails, _ = LOGIN_FAILS.get(uname.lower(), (0, 0.0))
         fails += 1
-        locked_until = time.time() + 60 if fails >= 5 else 0.0
+        locked_until = time.time() + LOGIN_LOCK_MINUTES * 60 if fails >= 5 else 0.0
         if fails >= 5:
             fails = 0
         LOGIN_FAILS[uname.lower()] = (fails, locked_until)
@@ -1234,12 +1248,28 @@ class API:
     # ---------- auth ----------
     def me(q, user):
         locked = SYNC_STATE["locked_by"] or {}
+        extra = {}
+        if user:
+            conn = get_db()
+            extra["idle_lock_minutes"] = int(get_setting(conn, "idle_lock_minutes", "5") or "5")
+            if user.get("uid"):
+                r = conn.execute("SELECT must_change, pin_hash, perms FROM users WHERE id=?",
+                                 (user["uid"],)).fetchone()
+                if r:
+                    extra["must_change"] = bool(r["must_change"])
+                    extra["has_pin"] = bool(r["pin_hash"])
+                    try:
+                        extra["perms"] = json.loads(r["perms"]) if r["perms"] else None
+                    except Exception:
+                        extra["perms"] = None
+            conn.close()
         return 200, {
             "logged_in": bool(user),
             "needs_setup": users_count() == 0,
             "username": user["username"] if user else "",
             "role": user["role"] if user else "",
             "version": APP_VERSION,
+            **extra,
             "locked_by": locked.get("device", ""),
             "locked_ts": locked.get("ts", ""),
             "own_lock": SYNC_STATE["own_lock"],
@@ -1263,28 +1293,61 @@ class API:
     def login(body, user):
         uname = norm_username(body.get("username"))
         pw = body.get("password") or ""
-        if login_throttle_check(uname):
-            return 429, {"error": "محاولات كتير غلط. استنى دقيقة وجرب تاني"}
+        pin = (body.get("pin") or "").strip()
+        wait = login_throttle_wait(uname)
+        if wait > 0:
+            return 429, {"error": "الحساب ده متقفل مؤقتًا بعد محاولات غلط كتير",
+                         "locked": True, "wait": wait}
         conn = get_db()
         u = conn.execute("SELECT * FROM users WHERE username=? COLLATE NOCASE", (uname,)).fetchone()
-        conn.close()
-        if not u or not check_password(pw, u["pass_hash"]):
+        if u and u["disabled"]:
+            conn.close()
+            return 403, {"error": "الحساب ده موقوف - كلم المدير"}
+        if u and u["locked_until"] and u["locked_until"] > now_str():
+            remaining = int((datetime.strptime(u["locked_until"], "%Y-%m-%d %H:%M:%S") - datetime.now()).total_seconds())
+            conn.close()
+            return 429, {"error": "الحساب ده متقفل مؤقتًا بعد محاولات غلط كتير",
+                         "locked": True, "wait": max(1, remaining)}
+        ok = False
+        if u:
+            if pin:
+                ok = bool(u["pin_hash"]) and check_password(pin, u["pin_hash"])
+            else:
+                ok = check_password(pw, u["pass_hash"])
+        if not ok:
             login_throttle_fail(uname)
+            wait = login_throttle_wait(uname)
+            if wait > 0 and u:
+                exp = (datetime.now() + timedelta(seconds=wait)).strftime("%Y-%m-%d %H:%M:%S")
+                conn.execute("UPDATE users SET locked_until=? WHERE id=?", (exp, u["id"]))
+                conn.commit()
+            conn.close()
             time.sleep(0.5)
+            if wait > 0:
+                return 429, {"error": "اتقفل مؤقتًا %d دقايق بعد 5 محاولات غلط" % LOGIN_LOCK_MINUTES,
+                             "locked": True, "wait": wait}
             return 401, {"error": "بيانات الدخول غير صحيحة"}
         login_throttle_clear(uname)
+        conn.execute("UPDATE users SET last_login=?, locked_until='' WHERE id=?",
+                     (now_str(), u["id"]))
+        log_action(conn, {"username": u["username"]}, "تسجيل دخول",
+                   "بالرقم السري" if pin else "بكلمة السر")
+        conn.commit()
+        conn.close()
         return 200, {"ok": True, "token": new_session(u["id"], u["username"], u["role"]),
-                     "username": u["username"], "role": u["role"]}
+                     "username": u["username"], "role": u["role"],
+                     "must_change": bool(u["must_change"]), "has_pin": bool(u["pin_hash"])}
 
     def login_users(q, user):
         conn = get_db()
         show = get_setting(conn, "login_show_users", "1") == "1"
         out = []
         if show and users_count() > 0:
-            for r in conn.execute("SELECT username, role FROM users ORDER BY username"):
+            for r in conn.execute("SELECT username, role, last_login FROM users WHERE disabled=0 ORDER BY username"):
                 name = r["username"]
                 initials = "".join(w[0] for w in name.split()[:2]).upper() or name[:1].upper()
-                out.append({"username": name, "role": r["role"], "initials": initials})
+                out.append({"username": name, "role": r["role"], "initials": initials,
+                            "last_login": r["last_login"] or ""})
         conn.close()
         return 200, out
 
@@ -1300,7 +1363,8 @@ class API:
         if not u or not check_password(old, u["pass_hash"]):
             conn.close()
             return 400, {"error": "كلمة السر الحالية غير صحيحة"}
-        conn.execute("UPDATE users SET pass_hash=? WHERE id=?", (hash_password(new), user["uid"]))
+        conn.execute("UPDATE users SET pass_hash=?, must_change=0 WHERE id=?", (hash_password(new), user["uid"]))
+        log_action(conn, user, "تغيير كلمة السر", "")
         conn.commit()
         conn.close()
         return 200, {"ok": True}
@@ -1308,20 +1372,36 @@ class API:
     # ---------- users (admin) ----------
     def list_users(q, user):
         conn = get_db()
-        out = rows(conn.execute("SELECT id, username, role, created_at FROM users ORDER BY username"))
+        out = rows(conn.execute(
+            "SELECT id, username, role, created_at, disabled, locked_until, last_login,"
+            " must_change, perms, CASE WHEN pin_hash<>'' THEN 1 ELSE 0 END AS has_pin,"
+            " (SELECT action || CASE WHEN details<>'' THEN ' - ' || details ELSE '' END"
+            "  FROM activity_log a WHERE a.username=u.username ORDER BY a.id DESC LIMIT 1) AS last_action,"
+            " (SELECT ts FROM activity_log a WHERE a.username=u.username ORDER BY a.id DESC LIMIT 1) AS last_action_ts"
+            " FROM users u ORDER BY username"))
+        now = now_str()
+        for r in out:
+            r["locked"] = bool(r["locked_until"] and r["locked_until"] > now)
+            try:
+                r["perms"] = json.loads(r["perms"]) if r["perms"] else None
+            except Exception:
+                r["perms"] = None
         conn.close()
         return 200, out
 
     def create_user(body, user):
         uname = norm_username(body.get("username"))
         pw = body.get("password") or ""
+        pin = (body.get("pin") or "").strip()
         role = body.get("role") if body.get("role") in ("admin", "user", "accountant", "warehouse") else "user"
         if len(uname) < 3 or len(pw) < 4:
             return 400, {"error": "اسم المستخدم 3 أحرف على الأقل وكلمة السر 4 على الأقل"}
+        if pin and (not pin.isdigit() or len(pin) < 4 or len(pin) > 8):
+            return 400, {"error": "الرقم السري من 4 لـ 8 أرقام"}
         conn = get_db()
         try:
-            conn.execute("INSERT INTO users (username, pass_hash, role, created_at) VALUES (?,?,?,?)",
-                         (uname, hash_password(pw), role, now_str()))
+            conn.execute("INSERT INTO users (username, pass_hash, role, created_at, pin_hash) VALUES (?,?,?,?,?)",
+                         (uname, hash_password(pw), role, now_str(), hash_password(pin) if pin else ""))
             log_action(conn, user, "مستخدم جديد", "%s (%s)" % (uname, role))
             conn.commit()
         except sqlite3.IntegrityError:
@@ -1335,9 +1415,166 @@ class API:
         if len(pw) < 4:
             return 400, {"error": "كلمة السر 4 أحرف على الأقل"}
         conn = get_db()
-        conn.execute("UPDATE users SET pass_hash=? WHERE id=?", (hash_password(pw), uid))
+        conn.execute("UPDATE users SET pass_hash=?, must_change=1 WHERE id=?", (hash_password(pw), uid))
+        log_action(conn, user, "إعادة تعيين كلمة سر", "مستخدم #%d" % uid)
         conn.commit()
         conn.close()
+        return 200, {"ok": True}
+
+    def set_pin(uid, body, user):
+        if user["role"] != "admin" and user.get("uid") != uid:
+            return 403, {"error": "admin_required"}
+        pin = (body.get("pin") or "").strip()
+        if pin and (not pin.isdigit() or len(pin) < 4 or len(pin) > 8):
+            return 400, {"error": "الرقم السري من 4 لـ 8 أرقام"}
+        conn = get_db()
+        if not conn.execute("SELECT id FROM users WHERE id=?", (uid,)).fetchone():
+            conn.close()
+            return 404, {"error": "المستخدم مش موجود"}
+        conn.execute("UPDATE users SET pin_hash=? WHERE id=?", (hash_password(pin) if pin else "", uid))
+        log_action(conn, user, "تعيين رقم سري" if pin else "مسح الرقم السري", "مستخدم #%d" % uid)
+        conn.commit()
+        conn.close()
+        return 200, {"ok": True, "has_pin": bool(pin)}
+
+    def set_status(uid, body, user):
+        disabled = 1 if body.get("disabled") else 0
+        conn = get_db()
+        u = conn.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
+        if not u:
+            conn.close()
+            return 404, {"error": "المستخدم مش موجود"}
+        if disabled and u["role"] == "admin":
+            n = conn.execute("SELECT COUNT(*) c FROM users WHERE role='admin' AND disabled=0").fetchone()["c"]
+            if u["disabled"] == 0 and n <= 1:
+                conn.close()
+                return 400, {"error": "لا يمكن إيقاف آخر مدير"}
+        if disabled and user.get("uid") == uid:
+            conn.close()
+            return 400, {"error": "مينفعش توقف حسابك بنفسك"}
+        conn.execute("UPDATE users SET disabled=? WHERE id=?", (disabled, uid))
+        log_action(conn, user, "إيقاف مستخدم" if disabled else "تفعيل مستخدم", u["username"])
+        conn.commit()
+        conn.close()
+        return 200, {"ok": True}
+
+    def unlock_user(uid, user):
+        conn = get_db()
+        u = conn.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
+        if not u:
+            conn.close()
+            return 404, {"error": "المستخدم مش موجود"}
+        conn.execute("UPDATE users SET locked_until='' WHERE id=?", (uid,))
+        log_action(conn, user, "فك قفل مستخدم", u["username"])
+        conn.commit()
+        conn.close()
+        with LOGIN_LOCK:
+            LOGIN_FAILS.pop(u["username"].lower(), None)
+            LOGIN_FAILS.pop("pin:mobile", None)
+        return 200, {"ok": True}
+
+    def set_role(uid, body, user):
+        role = body.get("role")
+        if role not in ("admin", "user", "accountant", "warehouse"):
+            return 400, {"error": "دور غير معروف"}
+        conn = get_db()
+        u = conn.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
+        if not u:
+            conn.close()
+            return 404, {"error": "المستخدم مش موجود"}
+        if u["role"] == "admin" and role != "admin":
+            n = conn.execute("SELECT COUNT(*) c FROM users WHERE role='admin' AND disabled=0").fetchone()["c"]
+            if n <= 1:
+                conn.close()
+                return 400, {"error": "لازم يفضل مدير واحد على الأقل"}
+        conn.execute("UPDATE users SET role=? WHERE id=?", (role, uid))
+        log_action(conn, user, "تغيير دور مستخدم", u["username"] + " -> " + role)
+        conn.commit()
+        conn.close()
+        return 200, {"ok": True}
+
+    def set_perms(uid, body, user):
+        conn = get_db()
+        u = conn.execute("SELECT id FROM users WHERE id=?", (uid,)).fetchone()
+        if not u:
+            conn.close()
+            return 404, {"error": "المستخدم مش موجود"}
+        perms = body.get("perms")
+        if perms is None:
+            val = ""
+        else:
+            secs = [s for s in (perms.get("sections") or []) if s in KNOWN_SECTIONS]
+            ops = [o for o in (perms.get("ops") or []) if o in KNOWN_OPS]
+            val = json.dumps({"sections": secs, "ops": ops}, ensure_ascii=False)
+        conn.execute("UPDATE users SET perms=? WHERE id=?", (val, uid))
+        log_action(conn, user, "تعديل صلاحيات", "مستخدم #%d" % uid)
+        conn.commit()
+        conn.close()
+        return 200, {"ok": True}
+
+    def unlock_session(body, user):
+        pw = body.get("password") or ""
+        pin = (body.get("pin") or "").strip()
+        conn = get_db()
+        if user.get("uid"):
+            u = conn.execute("SELECT * FROM users WHERE id=?", (user["uid"],),).fetchone()
+        else:
+            u = conn.execute("SELECT * FROM users WHERE username=? AND pin_hash<>''",
+                             (user.get("pin_user") or "",)).fetchone()
+        conn.close()
+        ok = False
+        if u:
+            if pin:
+                ok = bool(u["pin_hash"]) and check_password(pin, u["pin_hash"])
+            else:
+                ok = check_password(pw, u["pass_hash"])
+        if not ok:
+            time.sleep(0.5)
+            return 401, {"error": "غلط - جرب تاني"}
+        return 200, {"ok": True}
+
+    def mobile_pin_status(q, user):
+        conn = get_db()
+        us = rows(conn.execute("SELECT username, role FROM users WHERE pin_hash<>'' AND disabled=0 ORDER BY username"))
+        conn.close()
+        out = []
+        for r in us:
+            name = r["username"]
+            initials = "".join(w[0] for w in name.split()[:2]).upper() or name[:1].upper()
+            out.append({"username": name, "role": r["role"], "initials": initials})
+        return 200, {"required": len(us) > 0, "ok": bool(user.get("pin_ok")),
+                     "users": out, "user": user.get("pin_user", "")}
+
+    def mobile_pin_login(body, user):
+        pin = (body.get("pin") or "").strip()
+        if not pin:
+            return 400, {"error": "اكتب الرقم السري"}
+        wait = login_throttle_wait("pin:mobile")
+        if wait > 0:
+            return 429, {"error": "محاولات كتير غلط - استنى شوية", "locked": True, "wait": wait}
+        conn = get_db()
+        us = conn.execute("SELECT * FROM users WHERE pin_hash<>'' AND disabled=0").fetchall()
+        conn.close()
+        for u in us:
+            if check_password(pin, u["pin_hash"]):
+                login_throttle_clear("pin:mobile")
+                user["pin_ok"] = True
+                user["pin_user"] = u["username"]
+                conn = get_db()
+                conn.execute("UPDATE users SET last_login=? WHERE id=?", (now_str(), u["id"]))
+                log_action(conn, {"username": u["username"]}, "دخول بالرقم السري", "موبايل")
+                conn.commit()
+                conn.close()
+                return 200, {"ok": True, "username": u["username"], "role": u["role"]}
+        login_throttle_fail("pin:mobile")
+        time.sleep(0.5)
+        wait = login_throttle_wait("pin:mobile")
+        if wait > 0:
+            return 429, {"error": "اتقفل مؤقتًا بعد 5 محاولات غلط", "locked": True, "wait": wait}
+        return 401, {"error": "الرقم السري غلط"}
+
+    def mobile_lock(body, user):
+        user["pin_ok"] = False
         return 200, {"ok": True}
 
     def delete_user(uid):
@@ -3271,6 +3508,9 @@ ROUTES_POST = {
     "/api/sync/pull": (lambda b, u: API.sync_pull(b, u), True),
     "/api/mobile/config": (lambda b, u: API.mobile_config_save(b, u), True),
     "/api/sync/force-lock": (lambda b, u: API.sync_force_lock(b, u), True),
+    "/api/unlock": (lambda b, u: API.unlock_session(b, u), False),
+    "/api/mobile/pin-login": (lambda b, u: API.mobile_pin_login(b, u), False),
+    "/api/mobile/lock": (lambda b, u: API.mobile_lock(b, u), False),
 }
 ROUTES_GET = {
     "/api/me": (API.me, False),
@@ -3306,6 +3546,7 @@ ROUTES_GET = {
     "/api/profit": (API.profit, True),
     "/api/users": (API.list_users, True),
     "/api/check-update": (API.check_update, False),
+    "/api/mobile/pin-status": (API.mobile_pin_status, False),
 }
 
 STATIC_TYPES = {".html": "text/html; charset=utf-8", ".png": "image/png",
@@ -3325,8 +3566,24 @@ def view_get_allowed(path):
 
 
 MOBILE_GET_EXTRA = {"/api/cheques", "/api/aging", "/api/statement", "/api/item-names",
-                    "/api/mobile/today-summary", "/api/item-last-price"}
-MOBILE_POST_PATHS = {"/api/payments", "/api/invoices", "/api/customers"}
+                    "/api/mobile/today-summary", "/api/item-last-price", "/api/mobile/pin-status"}
+MOBILE_POST_PATHS = {"/api/payments", "/api/invoices", "/api/customers",
+                     "/api/mobile/pin-login", "/api/mobile/lock"}
+
+KNOWN_SECTIONS = {"accounts", "inventory", "production", "settings"}
+KNOWN_OPS = {"delete_docs", "monthly_close", "backup", "users_admin"}
+
+MOBILE_PIN_OPEN = {"/api/mobile/pin-status", "/api/mobile/pin-login", "/api/mobile/lock",
+                   "/api/me", "/api/version"}
+
+
+def mobile_pin_blocked(user, path):
+    if user.get("pin_ok") or path in MOBILE_PIN_OPEN:
+        return False
+    conn = get_db()
+    n = conn.execute("SELECT COUNT(*) c FROM users WHERE pin_hash<>'' AND disabled=0").fetchone()["c"]
+    conn.close()
+    return n > 0
 
 
 def mobile_get_allowed(path):
@@ -3449,6 +3706,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(403, {"error": "view_only"})
             if user["role"] == "mobile" and not mobile_get_allowed(path):
                 return self._send(403, {"error": "view_only"})
+            if user["role"] == "mobile" and mobile_pin_blocked(user, path):
+                return self._send(403, {"error": "pin_required"})
             if path in ROUTES_GET:
                 fn, adm = ROUTES_GET[path]
                 if adm and user["role"] != "admin":
@@ -3495,6 +3754,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(403, {"error": "view_only"})
             if user["role"] == "mobile" and path not in MOBILE_POST_PATHS:
                 return self._send(403, {"error": "view_only"})
+            if user["role"] == "mobile" and mobile_pin_blocked(user, path):
+                return self._send(403, {"error": "pin_required"})
             if SYNC_STATE["locked_by"] and path not in ("/api/sync/pull", "/api/sync/force-lock", "/api/sync/status"):
                 lk = SYNC_STATE["locked_by"]
                 return self._send(423, {"error": "device_locked",
@@ -3517,11 +3778,33 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(*API.convert_quote(int(path.strip("/").split("/")[2]), user))
             if path.startswith("/api/quotations/") and path.endswith("/cancel"):
                 return self._send(*API.cancel_quote(int(path.strip("/").split("/")[2]), user))
-            if path.startswith("/api/users/") and path.endswith("/reset"):
-                if user["role"] != "admin":
-                    return self._send(403, {"error": "admin_required"})
-                uid = int(path.strip("/").split("/")[2])
-                return self._send(*API.reset_user(uid, body, user))
+            if path.startswith("/api/users/"):
+                parts = path.strip("/").split("/")
+                if len(parts) == 4 and parts[2].isdigit():
+                    uid = int(parts[2])
+                    sub = parts[3]
+                    if sub == "reset":
+                        if user["role"] != "admin":
+                            return self._send(403, {"error": "admin_required"})
+                        return self._send(*API.reset_user(uid, body, user))
+                    if sub == "pin":
+                        return self._send(*API.set_pin(uid, body, user))
+                    if sub == "role":
+                        if user["role"] != "admin":
+                            return self._send(403, {"error": "admin_required"})
+                        return self._send(*API.set_role(uid, body, user))
+                    if sub == "status":
+                        if user["role"] != "admin":
+                            return self._send(403, {"error": "admin_required"})
+                        return self._send(*API.set_status(uid, body, user))
+                    if sub == "unlock":
+                        if user["role"] != "admin":
+                            return self._send(403, {"error": "admin_required"})
+                        return self._send(*API.unlock_user(uid, user))
+                    if sub == "perms":
+                        if user["role"] != "admin":
+                            return self._send(403, {"error": "admin_required"})
+                        return self._send(*API.set_perms(uid, body, user))
             self._send(404, {"error": "not found"})
         except Exception as e:
             self._send(500, {"error": str(e)})
