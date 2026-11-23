@@ -1,6 +1,6 @@
 {
-  "version": "2.9.5",
-  "zip_url": "https://github.com/hishammahmoud2626-gif/nixt-accounts/releases/download/v2.9.5/NixtAccounts-2.9.5-Portable.zip",
-  "sha256": "72de95b61aa8f4d0a65c1a4b47544008cb835fbaadbdfd792a919b8cc54c3ee0",
-  "notes": "نقل أزرار النسخ الاحتياطي وحالة النسخ ونسخ Drive إلى الإعدادات فقط. النسخ التلقائي مستمر بدون تغيير."
+  "version": "2.9.6",
+  "zip_url": "https://github.com/hishammahmoud2626-gif/nixt-accounts/releases/download/v2.9.6/NixtAccounts-2.9.6-Portable.zip",
+  "sha256": "9754f0981d007293b7adb8871ddc930cb55e72ddc4ebde499d9c75086ef6bab1",
+  "notes": "إدخال الجلد بالبواكي وقياس كل جلدة، طباعة مقاسات النعل مجمعة، تحسين عرض الموبايل، وإعادة استخدام نافذة Nixt بعد التحديث."
 }
