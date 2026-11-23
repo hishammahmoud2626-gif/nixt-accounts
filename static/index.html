@@ -153,6 +153,15 @@
   .user-chip{display:flex;flex-direction:column;align-items:center;gap:4px;width:92px;padding:10px 4px;border:2px solid #d1d5db;border-radius:12px;background:#fff;cursor:pointer}
   .user-chip:hover{border-color:#9ca3af}
   .user-chip.sel{border-color:var(--accent);background:var(--accent-soft)}
+  #login-all{margin-top:8px}
+  #login-all-list{max-height:220px;overflow:auto;border:1px solid var(--line);border-radius:10px}
+  .urow{display:flex;align-items:center;gap:8px;padding:7px 10px;cursor:pointer;border-bottom:1px solid var(--line)}
+  .urow:last-child{border-bottom:none}
+  .urow:hover{background:var(--accent-soft)}
+  .urow .avatar{width:30px;height:30px;border-radius:50%;background:#161616;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px;flex:none}
+  .urow-m{min-width:0;flex:1}
+  .urow .uname{font-size:13px;font-weight:600}
+  .urow .ulast{font-size:11px;color:var(--muted)}
   .user-chip .avatar{width:42px;height:42px;border-radius:50%;background:#161616;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:16px}
   .user-chip .uname{font-size:13px;font-weight:600;color:#111827;word-break:break-all}
   .user-chip .urole{font-size:11px;color:#6b7280}
@@ -477,6 +486,13 @@
     </div>
     <div id="login-form" class="hidden">
       <div id="login-users" class="user-pick hidden"></div>
+      <div id="login-all-wrap" class="hidden" style="margin-bottom:10px">
+        <button type="button" class="link-btn" id="li-all-toggle" style="margin-top:0" onclick="toggleAllUsers()">كل المستخدمين ▾</button>
+        <div id="login-all" class="hidden">
+          <input id="li-search" placeholder="ابحث بالاسم..." autocomplete="off" oninput="renderAllUsers()" style="margin-bottom:6px">
+          <div id="login-all-list"></div>
+        </div>
+      </div>
       <div id="li-picked" class="hidden" style="margin-bottom:10px;font-size:14px;font-weight:600"></div>
       <input id="li-username" placeholder="اسم المستخدم" autocomplete="off">
       <div class="pwd-wrap">
@@ -1049,6 +1065,16 @@
     <div class="modal">
       <h3>صلاحيات: <span id="perms-who"></span></h3>
       <p class="muted">اختار الأقسام اللي يقدر يشوفها ويشتغل فيها. القسم غير المحدد مش هيظهر له خالص.</p>
+      <div class="row" style="margin-bottom:8px">
+        <select id="perms-template" onchange="applyPermTemplate()" style="flex:1">
+          <option value="">قالب جاهز... (بيملّي الاختيارات تحت)</option>
+          <option value="full">شغل كامل - كل الأقسام مع الحذف</option>
+          <option value="full_nodel">شغل كامل - بدون حذف</option>
+          <option value="accounts">حسابات بس</option>
+          <option value="accounts_nodel">حسابات بس بدون حذف</option>
+          <option value="store">مخزون وإنتاج بس</option>
+        </select>
+      </div>
       <div id="perms-sections">
         <label class="perm-row"><input type="checkbox" data-sec="accounts"> الحسابات</label>
         <label class="perm-row"><input type="checkbox" data-sec="inventory"> المخزن</label>
@@ -1060,6 +1086,41 @@
         <button onclick="savePerms()">حفظ</button>
         <button class="ghost" onclick="resetPermsDefault()">رجوع للوضع العادي</button>
         <button class="ghost" onclick="closeModal('perms-modal')">إلغاء</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-bg" id="sessions-modal">
+    <div class="modal" style="min-width:420px;max-width:560px">
+      <h3>الجلسات النشطة</h3>
+      <p class="muted">مين داخل البرنامج دلوقتي ومن جهاز إيه. تقدر تطرد أي جلسة - الشخص هيتطلب منه يدخل من الأول.</p>
+      <div id="sessions-list" style="max-height:340px;overflow:auto"></div>
+      <div class="row" style="margin-top:10px">
+        <button class="ghost" onclick="loadSessions()">تحديث</button>
+        <button class="ghost" onclick="closeModal('sessions-modal')">قفل</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-bg" id="report-modal">
+    <div class="modal" style="min-width:420px;max-width:560px">
+      <h3>تقرير نشاط النهارده</h3>
+      <div id="report-list" style="max-height:380px;overflow:auto"></div>
+      <div class="row" style="margin-top:10px">
+        <button class="ghost" onclick="closeModal('report-modal')">قفل</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-bg" id="approve-modal">
+    <div class="modal" style="max-width:360px">
+      <h3>موافقة المدير</h3>
+      <p class="muted" id="approve-why"></p>
+      <input id="approve-pin" type="password" inputmode="numeric" placeholder="الرقم السري بتاع المدير" autocomplete="off" onkeydown="if(event.key==='Enter')submitApproval()">
+      <div class="bad" id="approve-err" style="font-size:13px;margin-top:6px"></div>
+      <div class="row" style="margin-top:10px">
+        <button onclick="submitApproval()">موافقة</button>
+        <button class="ghost" onclick="cancelApproval()">إلغاء</button>
       </div>
     </div>
   </div>
@@ -1347,6 +1408,8 @@
       <h2>المستخدمون</h2>
       <div class="row">
         <button onclick="openUserModal()">+ إضافة مستخدم</button>
+        <button class="ghost" onclick="openSessions()">الجلسات النشطة</button>
+        <button class="ghost" onclick="openDailyReport()">تقرير نشاط النهارده</button>
       </div>
       <div id="users-grid"></div>
       <p class="muted">المستخدم: شغل يومي كامل بدون حذف أو إعدادات أو استيراد. المدير: كل شيء. من زرار "صلاحيات" تقدر تقيد أي مستخدم بأقسام معينة أو تمنعه من الحذف. بعد 5 محاولات دخول غلط الحساب بيتقفل 5 دقايق لوحده. لو نسيت كلمات السر كلها شغّل ملف "استعادة-الدخول.bat".</p>
@@ -1479,7 +1542,7 @@ async function api(path, opts){
     throw new Error(msg);
   }
   const j = await r.json();
-  if(!r.ok){ throw new Error(j.error||'خطأ'); }
+  if(!r.ok){ const er=new Error(j.error||'خطأ'); er.need_approval=!!j.need_approval; er.limit=j.limit; throw er; }
   return j;
 }
 function filterTable(tid, q){
@@ -1652,13 +1715,20 @@ function fmtLast(ts){
   const td=n.getFullYear()+'-'+String(n.getMonth()+1).padStart(2,'0')+'-'+String(n.getDate()).padStart(2,'0');
   return 'آخر دخول: '+(d===td?'النهارده '+t:d);
 }
+let LOGIN_USERS=[];
 async function loadLoginUsers(){
   try{
     const users = await api('/api/login_users');
     const box = document.getElementById('login-users');
     if(!users || !users.length){ return; }
+    LOGIN_USERS = users.slice().sort((a,b)=>(b.last_login||'').localeCompare(a.last_login||''));
+    let recent=[]; try{ recent=JSON.parse(localStorage.getItem('nixt-recent-users')||'[]'); }catch(e){}
+    const names=LOGIN_USERS.map(u=>u.username);
+    recent=recent.filter(n=>names.indexOf(n)>=0);
+    LOGIN_USERS.forEach(u=>{ if(recent.indexOf(u.username)<0 && recent.length<4) recent.push(u.username); });
+    const top=recent.slice(0,4).map(n=>LOGIN_USERS.find(u=>u.username===n)).filter(Boolean);
     box.innerHTML='';
-    users.forEach(u=>{
+    top.forEach(u=>{
       const d=document.createElement('div');
       d.className='user-chip';
       d.innerHTML='<div class="avatar">'+esc(u.initials)+'</div><div class="uname">'+esc(u.username)+'</div><div class="urole">'+roleLabel(u.role)+'</div>'+(u.last_login?'<div class="ulast">'+esc(fmtLast(u.last_login))+'</div>':'');
@@ -1666,6 +1736,8 @@ async function loadLoginUsers(){
       box.appendChild(d);
     });
     box.classList.remove('hidden');
+    document.getElementById('login-all-wrap').classList.remove('hidden');
+    renderAllUsers();
     document.getElementById('li-username').classList.add('hidden');
     document.getElementById('li-other').classList.remove('hidden');
     const rem = localStorage.getItem('nixt-remember-user')==='1';
@@ -1676,6 +1748,28 @@ async function loadLoginUsers(){
       if(chip) chip.click();
     }
   }catch(e){ /* keep manual form */ }
+}
+function toggleAllUsers(){
+  const w=document.getElementById('login-all');
+  const opening=w.classList.contains('hidden');
+  w.classList.toggle('hidden');
+  document.getElementById('li-all-toggle').textContent=opening?'إخفاء القائمة ▴':'كل المستخدمين ▾';
+  if(opening){ renderAllUsers(); document.getElementById('li-search').focus(); }
+}
+function renderAllUsers(){
+  const si=document.getElementById('li-search');
+  const q=(si.value||'').trim();
+  const list=document.getElementById('login-all-list');
+  const rows=(LOGIN_USERS||[]).filter(u=>!q||u.username.includes(q));
+  list.innerHTML=rows.length?rows.map(u=>'<div class="urow" data-u="'+esc(u.username)+'" onclick="pickUserFromList(this.dataset.u)"><div class="avatar">'+esc(u.initials)+'</div><div class="urow-m"><div class="uname">'+esc(u.username)+'</div><div class="ulast">'+esc(roleLabel(u.role))+(u.last_login?' · '+esc(fmtLast(u.last_login)):'')+'</div></div></div>').join(''):'<div class="muted" style="padding:8px;font-size:13px">مفيش مستخدم بالاسم ده</div>';
+}
+function pickUserFromList(name){
+  const un=document.getElementById('li-username'), pk=document.getElementById('li-picked');
+  un.value=name; un.classList.add('hidden');
+  pk.textContent=name; pk.classList.remove('hidden');
+  document.querySelectorAll('.user-chip').forEach(c=>c.classList.remove('sel'));
+  document.getElementById('li-password').focus();
+  document.getElementById('login-err').textContent='';
 }
 function showGuide(){ const g=document.getElementById('guide-overlay'); if(g) g.classList.remove('hidden'); }
 function closeGuide(){ const g=document.getElementById('guide-overlay'); if(g) g.classList.add('hidden'); try{localStorage.setItem('nixt_guide_seen','1');}catch(e){} }
@@ -1710,6 +1804,7 @@ async function doLogin(){
     const rem=document.getElementById('li-remember').checked;
     localStorage.setItem('nixt-remember-user', rem?'1':'0');
     if(rem) localStorage.setItem('nixt-last-user', j.username);
+    try{ let rec=JSON.parse(localStorage.getItem('nixt-recent-users')||'[]'); rec=[j.username].concat(rec.filter(n=>n!==j.username)).slice(0,8); localStorage.setItem('nixt-recent-users',JSON.stringify(rec)); }catch(e){}
     currentUser={username:j.username, role:j.role, must_change:!!j.must_change, has_pin:!!j.has_pin, perms:null, idle_min:0};
     showApp(); bootData(); startIdleWatch();
     if(currentUser.must_change) openModal('mustchange-modal');
@@ -2252,14 +2347,26 @@ async function saveInvoice(andPrint){
   const body={customer_id:+cid, date:invDate, kind,
     shipping:v('i-shipping')||0, other_charges:v('i-other')||0, discount:v('i-discount')||0,
     notes:v('i-notes'), reason:v('i-reason'), return_of:v('i-return-of')||null, items};
-  try{
-    const r=await api('/api/invoices',{method:'POST',body:JSON.stringify(body)});
+  const doSave=async(b)=>{
+    const r=await api('/api/invoices',{method:'POST',body:JSON.stringify(b)});
     toast('تم حفظ '+KIND_LABEL[kind]+' رقم '+r.id);
     const wasReturn=(kind==='return'||kind==='purchase_return');
     resetInvoiceForm(); loadInvoices(); refreshCustomers(); loadItemNames();
     if(andPrint) openPrintChoice(r.id);
     if(wasReturn) showTab(kind==='return'?'sales':'purchases');
-  }catch(e){toast(e.message,true);}
+  };
+  try{
+    await doSave(body);
+  }catch(e){
+    if(e.need_approval){
+      const t=await askManagerPin('الخصم أكبر من المسموح'+(e.limit?' ('+fmt(e.limit)+' ج)':'')+' - محتاج موافقة المدير بالرقم السري.');
+      if(!t) return;
+      body.approval=t;
+      try{ await doSave(body); }catch(e2){ toast(e2.message,true); }
+      return;
+    }
+    toast(e.message,true);
+  }
 }
 async function lastInvoice(){
   try{
@@ -2289,12 +2396,24 @@ async function loadInvoices(){
     <td class="num">${fmt(i.pairs)}</td><td class="num">${fmt(i.net)}</td>
     <td style="white-space:nowrap"><button class="small" onclick="openPrintChoice(${i.id})">طباعة</button>
     <button class="small ghost" onclick="dupInvoice(${i.id})" title="نسخ الفاتورة دي لفاتورة جديدة">تكرار</button>
-    <button class="small danger" ${currentUser.role!=='admin'?'style="display:none"':''} onclick="delInvoice(${i.id})">حذف</button></td></tr>`).join('');
+    <button class="small danger" ${canDeleteDocs()?'':'style="display:none"'} onclick="delInvoice(${i.id})">حذف</button></td></tr>`).join('');
   filterTable('inv-table', document.getElementById('inv-search').value);
 }
-async function delInvoice(id){
-  if(!confirm('حذف الفاتورة رقم '+id+'؟')) return;
-  await api('/api/invoices/'+id,{method:'DELETE'}); toast('تم الحذف'); loadInvoices();
+function canDeleteDocs(){
+  if(!currentUser) return false;
+  if(currentUser.role==='admin') return true;
+  if(currentUser.perms && currentUser.perms.ops && currentUser.perms.ops.indexOf('delete_docs')>=0) return false;
+  return true;
+}
+async function delInvoice(id, tok, confirmed){
+  if(!confirmed && !confirm('حذف الفاتورة رقم '+id+'؟')) return;
+  try{
+    await api('/api/invoices/'+id,{method:'DELETE',headers:tok?{'X-Approval':tok}:{}});
+    toast('تم الحذف'); loadInvoices();
+  }catch(e){
+    if(e.need_approval){ const t=await askManagerPin('حذف فاتورة محتاج موافقة المدير.'); if(t) delInvoice(id,t,true); return; }
+    toast(e.message,true);
+  }
 }
 async function dupInvoice(id){
   try{
@@ -2422,7 +2541,7 @@ async function loadPayments(){
     <td>${p.party_kind==='supplier'?'دفع لمورد':'قبض'}</td>
     <td class="num">${fmt(p.cash)}</td><td class="num">${fmt(p.card)}</td><td class="num">${fmt(p.transfer)}</td><td class="num">${fmt(p.vcash)}</td><td class="num">${fmt(p.cheque)}</td>
     <td class="num"><b>${fmt(p.total)}</b></td><td>${esc(p.notes)}</td>
-    <td style="white-space:nowrap"><button class="small ghost" onclick="printVoucher(${p.id})">سند</button><button class="small danger" ${currentUser.role!=='admin'?'style="display:none"':''} onclick="delPayment(${p.id})">حذف</button></td></tr>`).join('');
+    <td style="white-space:nowrap"><button class="small ghost" onclick="printVoucher(${p.id})">سند</button><button class="small danger" ${canDeleteDocs()?'':'style="display:none"'} onclick="delPayment(${p.id})">حذف</button></td></tr>`).join('');
   filterTable('pay-table', document.getElementById('pay-search').value);
 }
 async function savePayment(){
@@ -2442,9 +2561,15 @@ async function savePayment(){
     loadPayments();
   }catch(e){toast(e.message,true);}
 }
-async function delPayment(id){
-  if(!confirm('حذف الدفعة رقم '+id+'؟')) return;
-  await api('/api/payments/'+id,{method:'DELETE'}); toast('تم الحذف'); loadPayments();
+async function delPayment(id, tok, confirmed){
+  if(!confirmed && !confirm('حذف الدفعة رقم '+id+'؟')) return;
+  try{
+    await api('/api/payments/'+id,{method:'DELETE',headers:tok?{'X-Approval':tok}:{}});
+    toast('تم الحذف'); loadPayments();
+  }catch(e){
+    if(e.need_approval){ const t=await askManagerPin('حذف دفعة محتاج موافقة المدير.'); if(t) delPayment(id,t,true); return; }
+    toast(e.message,true);
+  }
 }
 
 /* ---------- statement ---------- */
@@ -2755,6 +2880,7 @@ function openPerms(id,name){
   api('/api/users').then(us=>{
     const u=us.find(x=>x.id===id);
     document.getElementById('perms-who').textContent=name;
+    document.getElementById('perms-template').value='';
     const secs=(u && u.perms && u.perms.sections)||['accounts','inventory','production','settings'];
     document.querySelectorAll('#perms-sections input').forEach(c=>c.checked=secs.indexOf(c.dataset.sec)>=0);
     document.getElementById('perms-nodelete').checked=!!(u && u.perms && u.perms.ops && u.perms.ops.indexOf('delete_docs')>=0);
@@ -2791,6 +2917,70 @@ async function showUserActivity(name){
     box.innerHTML=mine.length?mine.map(a=>`<div style="padding:6px 0;border-bottom:1px solid var(--line);font-size:13px"><span class="muted num" style="font-size:12px">${esc(a.ts)}</span> - ${esc(a.action)}${a.details?' · '+esc(a.details):''}</div>`).join(''):'<p class="muted">مفيش نشاط مسجل له لسه.</p>';
   }catch(e){ box.innerHTML='<p class="bad">'+esc(e.message)+'</p>'; }
 }
+function applyPermTemplate(){
+  const t=document.getElementById('perms-template').value; if(!t) return;
+  const map={full:{s:['accounts','inventory','production','settings'],d:false},
+    full_nodel:{s:['accounts','inventory','production','settings'],d:true},
+    accounts:{s:['accounts'],d:false},
+    accounts_nodel:{s:['accounts'],d:true},
+    store:{s:['inventory','production'],d:true}};
+  const m=map[t]; if(!m) return;
+  document.querySelectorAll('#perms-sections input').forEach(c=>c.checked=m.s.indexOf(c.dataset.sec)>=0);
+  document.getElementById('perms-nodelete').checked=m.d;
+}
+function openSessions(){ openModal('sessions-modal'); loadSessions(); }
+async function loadSessions(){
+  const box=document.getElementById('sessions-list');
+  box.innerHTML='<p class="muted">جارٍ التحميل...</p>';
+  try{
+    const ss=await api('/api/sessions');
+    box.innerHTML=ss.length?ss.map(s=>`<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--line);font-size:13px">
+      <div style="flex:1;min-width:0"><b>${esc(s.username)}</b> <span class="muted">${esc(roleLabel(s.role))}${s.device?' · '+esc(s.device):''}</span> ${s.current?'<span class="badge ok">الجلسة دي</span>':''}<br>
+      <span class="muted num" style="font-size:12px">دخل: ${esc((s.created||'').slice(5,16))} · آخر نشاط: ${esc((s.last||'').slice(5,16))}</span></div>
+      ${s.current?'':'<button class="small danger" data-sid="'+s.sid+'" onclick="kickSession(this.dataset.sid)">طرد</button>'}
+    </div>`).join(''):'<p class="muted">مفيش جلسات نشطة.</p>';
+  }catch(e){ box.innerHTML='<p class="bad">'+esc(e.message)+'</p>'; }
+}
+async function kickSession(sid){
+  if(!confirm('طرد الجلسة دي؟ هيتطلب من الشخص يدخل من الأول.')) return;
+  try{ await api('/api/sessions/kick',{method:'POST',body:JSON.stringify({sid})}); toast('اتطردت الجلسة'); loadSessions(); }
+  catch(e){ toast(e.message,true); loadSessions(); }
+}
+function openDailyReport(){ openModal('report-modal'); loadDailyReport(); }
+async function loadDailyReport(){
+  const box=document.getElementById('report-list');
+  box.innerHTML='<p class="muted">جارٍ التحميل...</p>';
+  try{
+    const list=await api('/api/activity?date='+today());
+    const by={};
+    list.forEach(a=>{ const u=a.username||'غير معروف'; (by[u]=by[u]||[]).push(a); });
+    const names=Object.keys(by);
+    box.innerHTML=names.length?names.map(u=>`<div style="margin-bottom:12px"><div style="font-weight:700;font-size:14px">${esc(u)} <span class="badge info">${by[u].length} حركة</span></div>`+
+      by[u].slice(0,30).map(a=>`<div style="padding:3px 0;font-size:13px"><span class="muted num" style="font-size:12px">${esc((a.ts||'').slice(11,16))}</span> - ${esc(a.action)}${a.details?' · '+esc(a.details):''}</div>`).join('')+'</div>').join(''):'<p class="muted">مفيش نشاط مسجل النهارده لسه.</p>';
+  }catch(e){ box.innerHTML='<p class="bad">'+esc(e.message)+'</p>'; }
+}
+let approvalResolve=null;
+function askManagerPin(why){
+  return new Promise(res=>{
+    approvalResolve=res;
+    document.getElementById('approve-why').textContent=why||'الإجراء ده محتاج موافقة المدير.';
+    document.getElementById('approve-pin').value='';
+    document.getElementById('approve-err').textContent='';
+    openModal('approve-modal');
+    setTimeout(()=>document.getElementById('approve-pin').focus(),100);
+  });
+}
+async function submitApproval(){
+  const pin=document.getElementById('approve-pin').value.trim();
+  if(!pin){ document.getElementById('approve-err').textContent='اكتب الرقم السري'; return; }
+  try{
+    const j=await api('/api/approve',{method:'POST',body:JSON.stringify({pin})});
+    closeModal('approve-modal');
+    toast('المدير '+j.by+' وافق');
+    const r=approvalResolve; approvalResolve=null; if(r) r(j.approval);
+  }catch(e){ document.getElementById('approve-err').textContent=e.message; }
+}
+function cancelApproval(){ closeModal('approve-modal'); const r=approvalResolve; approvalResolve=null; if(r) r(null); }
 function openUserModal(){
   document.getElementById('u-name').value=''; document.getElementById('u-pass').value=''; document.getElementById('u-pin').value='';
   openModal('user-modal');
