@@ -13,6 +13,7 @@ import hmac
 import io
 import json
 import os
+import re
 import secrets
 import shutil
 import socket
@@ -36,7 +37,7 @@ try:
 except Exception:
     drive_sync = None
 
-APP_VERSION = "2.9.0"
+APP_VERSION = "2.9.2"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -51,6 +52,24 @@ def default_data_root():
 DATA_ROOT = os.environ.get("NIXT_DATA_DIR", default_data_root())
 DATA_DIR = os.path.join(DATA_ROOT, "data")
 BACKUP_DIR = os.path.join(DATA_ROOT, "backups")
+
+
+def _nixt_log_path():
+    return os.path.join(DATA_ROOT, "logs", "nixt.log")
+
+
+def _nixt_log(msg):
+    """Append one timestamped line to the diagnostic log. Never raises."""
+    try:
+        d = os.path.join(DATA_ROOT, "logs")
+        os.makedirs(d, exist_ok=True)
+        p = _nixt_log_path()
+        if os.path.exists(p) and os.path.getsize(p) > 400000:
+            os.remove(p)
+        with open(p, "a", encoding="utf-8") as f:
+            f.write(datetime.now().strftime("%Y-%m-%d %H:%M:%S") + " [v" + APP_VERSION + "] " + msg + "\n")
+    except Exception:
+        pass
 DB_PATH = os.path.join(DATA_DIR, "nixt.db")
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 HOST = "127.0.0.1"
@@ -4001,6 +4020,8 @@ class Handler(BaseHTTPRequestHandler):
         REQ.ua = self.headers.get("User-Agent") or ""
         REQ.ip = self.client_address[0] if self.client_address else ""
         path, q = u.path, parse_qs(u.query)
+        if path in ("/", "/index.html", "/api/version", "/api/whoami"):
+            _nixt_log("REQ GET " + path)
         try:
             if path == "/" or path == "/index.html":
                 u0 = self._user()
@@ -4322,9 +4343,26 @@ def open_app_window():
 
 def open_browser():
     try:
-        webbrowser.open("http://%s:%d/" % (HOST, PORT))
+        return bool(webbrowser.open("http://%s:%d/" % (HOST, PORT)))
     except Exception:
-        pass
+        return False
+
+
+def launch_ui():
+    """Try the standalone window, then the default browser without leaking errors."""
+    try:
+        if open_app_window() is not None:
+            _nixt_log("window launched: app-window")
+            return True
+    except Exception:
+        import traceback
+        _nixt_log("app-window failed; trying browser:\n" + traceback.format_exc())
+    if open_browser():
+        _nixt_log("window launched: fallback-browser")
+        return True
+    _nixt_log("both window launch methods failed")
+    show_message("Nixt could not open a window. See log:\n" + _nixt_log_path())
+    return False
 
 
 def watchdog_loop(server):
@@ -4369,6 +4407,7 @@ def server_serves_index():
 
 
 def show_message(text):
+    _nixt_log("MESSAGE SHOWN: " + text.split("\n")[0][:160])
     try:
         import ctypes
         ctypes.windll.user32.MessageBoxW(0, text, "نظام نيكست للحسابات", 0x40)
@@ -4431,33 +4470,62 @@ def cleanup_old_installs():
         pass
 
 
-def main():
-    init_db()
-    cleanup_old_installs()
-    if port_busy():
-        ver = running_server_version()
-        if ver == APP_VERSION and server_serves_index():
-            if open_app_window() is None:
-                open_browser()
-            return
-        if ver and version_tuple(ver) > version_tuple(APP_VERSION):
-            # a NEWER copy is already running: just open its window
-            if open_app_window() is None:
-                open_browser()
-            return
-        if ver and version_tuple(ver) < version_tuple(APP_VERSION):
-            # an older copy is stuck in the background: stop it and continue
-            if not kill_stale_server():
-                show_message(
-                    "فيه نسخة أقدم من البرنامج (إصدار " + ver + ") معلّقة ومش قادر أقفلها.\n\n"
-                    + "اعمل Restart للجهاز وبعدين شغّل البرنامج تاني.")
-                return
-        else:
+def _port_check_and_resolve():
+    """If the port is taken by another Nixt copy, open its window or kill it.
+    Returns True when THIS instance should stop (another copy owns the port)."""
+    if not port_busy():
+        return False
+    ver = running_server_version()
+    _nixt_log("port busy; running version: %r" % (ver,))
+    if ver == APP_VERSION and server_serves_index():
+        launch_ui()
+        return True
+    if ver and version_tuple(ver) > version_tuple(APP_VERSION):
+        # a NEWER copy is already running: just open its window
+        launch_ui()
+        return True
+    if ver and version_tuple(ver) < version_tuple(APP_VERSION):
+        # an older copy is stuck in the background: stop it and continue
+        if not kill_stale_server():
             show_message(
-                "فيه برنامج تاني مسك منفذ التشغيل.\n\n"
+                "فيه نسخة أقدم من البرنامج (إصدار " + ver + ") معلّقة ومش قادر أقفلها.\n\n"
                 + "اعمل Restart للجهاز وبعدين شغّل البرنامج تاني.")
+            return True
+        return False
+    show_message(
+        "فيه برنامج تاني مسك منفذ التشغيل.\n\n"
+        + "اعمل Restart للجهاز وبعدين شغّل البرنامج تاني.")
+    return True
+
+
+def _main():
+    _nixt_log("=== app start ===")
+    try:
+        init_db()
+        _nixt_log("init_db ok")
+    except Exception:
+        import traceback as _tb
+        _nixt_log("init_db FAILED:\n" + _tb.format_exc())
+        show_message("حصل خطأ في قاعدة البيانات أول التشغيل.\n\nابعت الملف ده لدعم نيكست:\n" + _nixt_log_path())
+        return
+    try:
+        cleanup_old_installs()
+        _nixt_log("cleanup ok")
+    except Exception:
+        import traceback as _tb
+        _nixt_log("cleanup_old_installs FAILED (continuing):\n" + _tb.format_exc())
+    try:
+        if _port_check_and_resolve():
             return
-    auto_backup_tick()
+    except Exception:
+        import traceback as _tb
+        _nixt_log("port check FAILED (continuing to bind):\n" + _tb.format_exc())
+    _nixt_log("port free, continuing startup")
+    try:
+        auto_backup_tick()
+    except Exception:
+        import traceback as _tb
+        _nixt_log("auto_backup FAILED (continuing):\n" + _tb.format_exc())
     threading.Thread(target=auto_backup_loop, daemon=True).start()
     if drive_sync is not None:
         try:
@@ -4465,14 +4533,25 @@ def main():
             drive_sync.start_worker(build_snapshot_bytes)
         except Exception:
             pass
-    sync_on_startup()
+    try:
+        sync_on_startup()
+    except Exception:
+        import traceback as _tb
+        _nixt_log("sync_on_startup FAILED (continuing):\n" + _tb.format_exc())
     global MOBILE_BOUND
-    _c = get_db()
-    MOBILE_BOUND = get_setting(_c, "mobile_enabled", "0") == "1"
-    _c.close()
+    try:
+        _c = get_db()
+        MOBILE_BOUND = get_setting(_c, "mobile_enabled", "0") == "1"
+        _c.close()
+    except Exception:
+        import traceback as _tb
+        _nixt_log("mobile flag read FAILED (default off):\n" + _tb.format_exc())
+        MOBILE_BOUND = False
     try:
         server = ThreadingHTTPServer(("0.0.0.0" if MOBILE_BOUND else HOST, PORT), Handler)
+        _nixt_log("server bound (mobile_bound=%s)" % MOBILE_BOUND)
     except OSError:
+        _nixt_log("server bind FAILED", )
         show_message(
             "البرنامج مش قادر يفتح منفذ التشغيل.\n\n"
             + "اعمل Restart للجهاز وبعدين شغّل البرنامج تاني.")
@@ -4480,17 +4559,42 @@ def main():
 
     def launch_window():
         time.sleep(1.0)
-        if open_app_window() is None:
-            open_browser()
+        if not launch_ui():
+            server.shutdown()
 
+    def self_check():
+        time.sleep(2.0)
+        try:
+            req = urllib.request.Request(
+                "http://%s:%d/api/version" % (HOST, PORT),
+                headers={"User-Agent": "NixtAccounts/" + APP_VERSION})
+            with urllib.request.urlopen(req, timeout=3) as r:
+                body = r.read().decode("utf-8", "ignore")
+            _nixt_log("self-check ok: " + body[:120])
+        except Exception as e:
+            _nixt_log("self-check FAILED: %r" % (e,))
+
+    LAST_ACTIVITY[0] = time.time()
     threading.Thread(target=launch_window, daemon=True).start()
+    threading.Thread(target=self_check, daemon=True).start()
     threading.Thread(target=watchdog_loop, args=(server,), daemon=True).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
+        server.server_close()
         sync_on_shutdown()
+
+
+def main():
+    try:
+        _main()
+        _nixt_log("server loop exited normally")
+    except Exception:
+        import traceback as _tb
+        _nixt_log("FATAL:\n" + _tb.format_exc())
+        show_message("حصل خطأ وتعذّر تشغيل البرنامج.\n\nابعت الملف ده لدعم نيكست:\n" + _nixt_log_path())
 
 
 if __name__ == "__main__":
