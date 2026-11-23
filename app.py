@@ -36,7 +36,7 @@ try:
 except Exception:
     drive_sync = None
 
-APP_VERSION = "2.2.0"
+APP_VERSION = "2.3.0"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -1315,7 +1315,7 @@ class API:
     def create_user(body, user):
         uname = norm_username(body.get("username"))
         pw = body.get("password") or ""
-        role = body.get("role") if body.get("role") in ("admin", "user", "accountant") else "user"
+        role = body.get("role") if body.get("role") in ("admin", "user", "accountant", "warehouse") else "user"
         if len(uname) < 3 or len(pw) < 4:
             return 400, {"error": "اسم المستخدم 3 أحرف على الأقل وكلمة السر 4 على الأقل"}
         conn = get_db()
@@ -1407,6 +1407,27 @@ class API:
         debtors = [c for c in ag.get("customers", [])
                    if (c.get("d60") or 0) + (c.get("d90") or 0) > 0.005][:5]
         return 200, {"date": today, "cheques": chqs, "debtors": debtors}
+
+    def item_last_price(q, user):
+        cid = q.get("customer_id", [""])[0]
+        name = (q.get("item_name", [""])[0] or "").strip()
+        if not name:
+            return 400, {"error": "item_name required"}
+        conn = get_db()
+        row = None
+        if cid:
+            row = conn.execute(
+                "SELECT ii.price, i.date FROM invoice_items ii JOIN invoices i ON i.id=ii.invoice_id"
+                " WHERE ii.item_name=? AND i.customer_id=? AND i.kind='sale'"
+                " ORDER BY i.date DESC, i.id DESC LIMIT 1", (name, cid)).fetchone()
+        if not row:
+            row = conn.execute(
+                "SELECT ii.price, i.date FROM invoice_items ii JOIN invoices i ON i.id=ii.invoice_id"
+                " WHERE ii.item_name=? AND i.kind='sale'"
+                " ORDER BY i.date DESC, i.id DESC LIMIT 1", (name,)).fetchone()
+        conn.close()
+        return 200, {"price": row["price"] if row else None,
+                     "date": row["date"] if row else ""}
 
     def mobile_config(q, user):
         return 200, mobile_config_payload()
@@ -3275,6 +3296,7 @@ ROUTES_GET = {
     "/api/quotations": (API.list_quotations, False),
     "/api/mobile/bootstrap": (API.mobile_bootstrap, False),
     "/api/mobile/today-summary": (API.mobile_today_summary, False),
+    "/api/item-last-price": (API.item_last_price, False),
     "/api/mobile/config": (API.mobile_config, True),
     "/api/drive/status": (API.drive_status, True),
     "/api/backups": (API.list_backups, True),
@@ -3303,7 +3325,7 @@ def view_get_allowed(path):
 
 
 MOBILE_GET_EXTRA = {"/api/cheques", "/api/aging", "/api/statement", "/api/item-names",
-                    "/api/mobile/today-summary"}
+                    "/api/mobile/today-summary", "/api/item-last-price"}
 MOBILE_POST_PATHS = {"/api/payments", "/api/invoices", "/api/customers"}
 
 
