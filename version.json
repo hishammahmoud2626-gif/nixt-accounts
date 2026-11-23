@@ -1,5 +1,5 @@
 {
-  "version": "2.3.0",
-  "zip_url": "https://github.com/hishammahmoud2626-gif/nixt-accounts/releases/download/v2.3.0/NixtAccounts-2.3.0-Portable.zip",
-  "notes": "فاتورة بيع أسرع (اقتراح آخر سعر + زرار تكرار)، إعدادات عرض للموبايل (فاتح/داكن، خط أكبر، أزرار أكبر)، صلاحية مخزن جديدة، تنبيه قبل الحفظ من الأخطاء الشائعة، تراجع عن آخر عملية، وإعداد أول تشغيل أسهل مع دليل سريع."
+  "version": "2.4.0",
+  "zip_url": "https://github.com/hishammahmoud2626-gif/nixt-accounts/releases/download/v2.4.0/NixtAccounts-2.4.0-Portable.zip",
+  "notes": "شاشة دخول وإدارة مستخدمين جديدة: رقم سري (PIN) للموبايل، قفل سريع وتلقائي للشاشة، صلاحيات أدق لكل مستخدم، نشاط كل مستخدم، قفل مؤقت بعد محاولات دخول غلط متكررة، واستعادة آمنة لكلمة السر."
 }
