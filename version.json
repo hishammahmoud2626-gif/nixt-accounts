@@ -1,6 +1,6 @@
 {
-  "version": "2.10.0",
-  "zip_url": "https://github.com/hishammahmoud2626-gif/nixt-accounts/releases/download/v2.10.0/NixtAccounts-2.10.0-Portable.zip",
-  "sha256": "c051ac51f8661eef7cffdc0d2c04caa9c41bf0db2829a7e1b26957233ef86b57",
-  "notes": "تصميم جديد داكن بالبرتقالي، صفحات ونماذج مدمجة، خط عربي محلي، ومراجعة عرض الموبايل والطباعة. نفس البيانات والحسابات."
+  "version": "2.11.0",
+  "zip_url": "https://github.com/hishammahmoud2626-gif/nixt-accounts/releases/download/v2.11.0/NixtAccounts-2.11.0-Portable.zip",
+  "sha256": "f6dc1b1e133f3cce17d519b5f77830ee168aeb0e9ec8d207c872f9645fddf434",
+  "notes": "طلبات تشغيل ودفعات مجمعة مع إنتاج وتسليم وفوترة جزئية، ألوان موحدة، شراء النعل بالمقاسات أو بإجمالي اللون، نوافذ إدخال أصغر وتصحيح التحقق من نجاح التحديث."
 }
