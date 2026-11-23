@@ -118,6 +118,41 @@ nav button{flex:1;background:none;border:none;color:var(--muted);font-family:inh
 nav button svg{width:21px;height:21px}
 nav button.on{color:var(--accent3)}
 nav button.on svg{filter:drop-shadow(0 0 6px rgba(217,119,6,.5))}
+/* today + quick add */
+.quick{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:12px}
+.qbtn{background:linear-gradient(160deg,var(--card),var(--card2));border:1px solid var(--line);
+  border-radius:var(--radius);padding:13px 8px;display:flex;flex-direction:column;align-items:center;gap:7px;
+  color:var(--ink);font-family:inherit;font-size:12.5px;font-weight:800;cursor:pointer;box-shadow:var(--shadow)}
+.qbtn svg{width:22px;height:22px;color:var(--accent3)}
+.qbtn:active{border-color:var(--accent)}
+.due-tag{font-size:10px;font-weight:800;border-radius:6px;padding:2px 7px;background:var(--card2);color:var(--muted)}
+.due-tag.late{background:var(--bad-soft);color:var(--bad)}
+.due-tag.now{background:var(--accent-soft);color:var(--accent3)}
+.mini-btn{background:var(--card2);border:1px solid var(--line2);color:var(--accent3);border-radius:9px;
+  padding:6px 10px;font-family:inherit;font-size:11px;font-weight:800;cursor:pointer;white-space:nowrap}
+.mini-btn:active{border-color:var(--accent)}
+/* bottom sheet */
+.sheet-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:60;display:none}
+.sheet{position:fixed;left:0;right:0;bottom:0;z-index:61;background:var(--card);border-radius:18px 18px 0 0;
+  border:1px solid var(--line);padding:16px 16px calc(18px + env(safe-area-inset-bottom,0px));
+  max-height:82vh;overflow-y:auto;display:none;animation:rise .25s ease}
+.sheet h3{margin:0 0 12px;font-size:15px;font-weight:800}
+.f-label{display:block;font-size:11.5px;color:var(--muted);font-weight:700;margin:10px 0 4px}
+.f-input,.f-select{width:100%;background:var(--card2);border:1px solid var(--line2);border-radius:11px;
+  padding:11px 12px;color:var(--ink);font-family:inherit;font-size:14px;outline:none}
+.f-input:focus,.f-select:focus{border-color:var(--accent)}
+.f-input::placeholder{color:var(--muted)}
+.f-grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.item-row{display:grid;grid-template-columns:1fr 70px 90px 34px;gap:7px;margin-top:8px;align-items:center}
+.item-row .del{background:var(--bad-soft);border:1px solid var(--bad);color:var(--bad);border-radius:9px;
+  height:38px;font-size:15px;font-weight:800;cursor:pointer}
+.add-line{background:none;border:1px dashed var(--line2);color:var(--muted);border-radius:10px;width:100%;
+  padding:9px;margin-top:10px;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer}
+.sheet .primary{width:100%;margin-top:16px}
+.f-err{color:var(--bad);font-size:12px;font-weight:700;margin-top:8px;min-height:15px}
+.toast{position:fixed;top:calc(env(safe-area-inset-top,0px) + 60px);left:50%;transform:translateX(-50%);
+  background:var(--ok-soft);border:1px solid var(--ok);color:var(--ok);border-radius:12px;
+  padding:10px 18px;font-size:13px;font-weight:800;z-index:70;display:none}
 /* states */
 .center{padding:60px 20px;text-align:center;color:var(--muted)}
 .center svg{width:52px;height:52px;color:var(--line2);margin-bottom:12px}
@@ -139,7 +174,7 @@ button.primary{background:linear-gradient(180deg,var(--accent),var(--accent2));c
     <div class="ver num" id="co-ver"></div>
   </div>
   <div class="spacer"></div>
-  <span class="badge">عرض فقط</span>
+  <span class="badge" id="badge-view">عرض فقط</span>
   <button class="iconbtn" id="btn-refresh" title="تحديث">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
   </button>
@@ -148,6 +183,21 @@ button.primary{background:linear-gradient(180deg,var(--accent),var(--accent2));c
 <main id="main" style="display:none">
   <!-- home -->
   <section class="screen on" id="scr-home">
+    <div class="quick" id="quick-add" style="display:none">
+      <button class="qbtn" onclick="openSheet('receipt')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg>
+        سند قبض</button>
+      <button class="qbtn" onclick="openSheet('payment')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg>
+        سند صرف</button>
+      <button class="qbtn" onclick="openSheet('invoice')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1z"/><path d="M12 8v6"/><path d="M9 11h6"/></svg>
+        فاتورة بيع</button>
+    </div>
+    <div class="panel" id="today-panel" style="display:none">
+      <h3><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg> المطلوب النهارده</h3>
+      <div id="today-body"></div>
+    </div>
     <div class="kpis" id="kpis"></div>
     <div class="panel">
       <h3><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/></svg> المبيعات آخر 6 شهور</h3>
@@ -201,6 +251,7 @@ button.primary{background:linear-gradient(180deg,var(--accent),var(--accent2));c
         <div style="font-weight:800;font-size:16px" id="d-title"></div>
         <div class="sub" style="font-size:11.5px;color:var(--muted)" id="d-sub"></div>
       </div>
+      <button class="mini-btn" id="d-share">مشاركة PDF</button>
     </div>
     <div id="d-body"></div>
   </section>
@@ -220,6 +271,10 @@ button.primary{background:linear-gradient(180deg,var(--accent),var(--accent2));c
   <button class="primary" onclick="location.reload()">إعادة المحاولة</button>
 </div>
 
+<div class="sheet-overlay" id="sheet-overlay" onclick="closeSheet()"></div>
+<div class="sheet" id="sheet"></div>
+<div class="toast" id="toast"></div>
+<datalist id="item-names"></datalist>
 <nav id="nav" style="display:none">
   <button class="on" data-scr="scr-home">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/></svg>
@@ -304,7 +359,12 @@ function partyRow(p,isSupplier){
   const money=p.balance>0.005||p.balance<-0.005?fmt(Math.abs(p.balance)):'';
   return '<div class="row-item" style="cursor:default"><div class="main"><div class="name">'+esc(p.name)+'</div>'+
     (p.phone?'<div class="sub num">'+esc(p.phone)+'</div>':'')+'</div>'+
-    '<div style="text-align:left"><div class="amt '+cls+'">'+money+'</div><div class="sub" style="text-align:left">'+amt+'</div></div></div>';
+    '<div style="text-align:left"><div class="amt '+cls+'">'+money+'</div><div class="sub" style="text-align:left">'+amt+'</div></div>'+
+    '<button class="mini-btn" onclick="shareStatement('+p.id+')">كشف حساب</button></div>';
+}
+function partyName(id){
+  const p=DATA.customers.concat(DATA.suppliers).find(x=>x.id===id);
+  return p?p.name:'';
 }
 function renderParties(){
   const cq=($('cust-q').value||'').trim(), sq=($('supp-q').value||'').trim();
@@ -337,6 +397,7 @@ async function openInvoice(id){
       h+='<div class="balance-box"><div class="t">'+owe+'</div><div class="v">'+fmt(Math.abs(i.party_balance))+'</div></div>';
     }
     $('d-body').innerHTML=h;
+    $('d-share').onclick=function(){shareInvoice(i.id);};
     showScr('scr-inv-detail');
     window.scrollTo(0,0);
   }catch(e){alert('تعذر فتح الفاتورة: '+e.message);}
@@ -356,6 +417,151 @@ document.querySelectorAll('#inv-filters .fchip').forEach(c=>c.onclick=()=>{
 });
 $('btn-refresh').onclick=()=>load(true);
 
+/* ---------- today + quick add + share (2.2.0) ---------- */
+function bridge(){return (typeof NixtAndroid!=='undefined')?NixtAndroid:null;}
+function shareStatement(id){
+  const b=bridge();
+  if(b&&b.shareStatement){b.shareStatement(id,partyName(id));}
+  else{alert('مشاركة الـ PDF متاحة من تطبيق نيكست على الموبايل (الإصدار 2.2.0 أو أحدث). من الكمبيوتر استخدم زرار الطباعة في كشف الحساب.');}
+}
+function shareInvoice(id){
+  const b=bridge();
+  if(b&&b.shareInvoice){b.shareInvoice(id);}
+  else{alert('مشاركة الـ PDF متاحة من تطبيق نيكست على الموبايل (الإصدار 2.2.0 أو أحدث). من الكمبيوتر استخدم زرار الطباعة في الفاتورة.');}
+}
+async function apiPost(p,body){
+  const r=await fetch(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  if(r.status===401){showGate();throw new Error('login');}
+  const j=await r.json().catch(()=>({}));
+  if(!r.ok){
+    if(j.error==='view_only'){throw new Error('حدّث برنامج الكمبيوتر للإصدار 2.2.0 عشان الإضافة من الموبايل تشتغل');}
+    throw new Error(j.error||'خطأ');
+  }
+  return j;
+}
+function toast(msg){
+  const t=$('toast');t.textContent=msg;t.style.display='block';
+  setTimeout(()=>{t.style.display='none';},2600);
+}
+async function loadToday(){
+  try{
+    const t=await api('/api/mobile/today-summary');
+    const chq=t.cheques||[], deb=t.debtors||[];
+    if(!chq.length&&!deb.length){$('today-panel').style.display='none';return;}
+    let h='';
+    if(chq.length){
+      h+='<div style="font-size:12px;font-weight:800;color:var(--muted);margin-bottom:4px">شيكات مستحقة خلال أسبوع</div>';
+      h+=chq.map(c=>{
+        const tag=c.overdue?'<span class="due-tag late">متأخر</span>':(c.due_today?'<span class="due-tag now">النهارده</span>':'<span class="due-tag num">'+esc(c.due_date)+'</span>');
+        return '<div class="row-item" style="cursor:default"><div class="main"><div class="name">'+esc(c.customer_name)+'</div>'+
+          '<div class="sub num">'+esc(c.cheque_number||'')+' '+esc(c.bank||'')+'</div></div>'+tag+
+          '<div class="amt bad">'+fmt(c.amount)+'</div></div>';
+      }).join('');
+    }
+    if(deb.length){
+      h+='<div style="font-size:12px;font-weight:800;color:var(--muted);margin:10px 0 4px">أكبر مديونيات متأخرة (+60 يوم)</div>';
+      h+=deb.map(d=>'<div class="row-item" style="cursor:default"><div class="main"><div class="name">'+esc(d.name)+'</div></div>'+
+        '<div class="amt bad">'+fmt((d.d60||0)+(d.d90||0))+'</div></div>').join('');
+    }
+    $('today-body').innerHTML=h;
+    $('today-panel').style.display='';
+  }catch(e){$('today-panel').style.display='none';}
+}
+let ITEM_NAMES=null;
+async function ensureItemNames(){
+  if(ITEM_NAMES)return;
+  try{
+    ITEM_NAMES=await api('/api/item-names');
+    $('item-names').innerHTML=(ITEM_NAMES||[]).map(n=>'<option value="'+esc(n)+'">').join('');
+  }catch(e){ITEM_NAMES=[];}
+}
+function partyOptions(kind){
+  const l=kind==='supplier'?DATA.suppliers:DATA.customers;
+  return '<option value="">اختر '+(kind==='supplier'?'المورد':'العميل')+'...</option>'+
+    l.map(p=>'<option value="'+p.id+'">'+esc(p.name)+'</option>').join('');
+}
+function openSheet(kind){
+  const sh=$('sheet');
+  if(kind==='invoice'){sh.innerHTML=invoiceForm();}
+  else{sh.innerHTML=receiptForm(kind);}
+  $('sheet-overlay').style.display='block';sh.style.display='block';
+  const fm=$('f-method');
+  if(fm){fm.onchange=function(){$('f-due-wrap').style.display=(fm.value==='cheque')?'block':'none';};}
+  if(kind==='invoice'){addItemRow();ensureItemNames();}
+}
+function closeSheet(){$('sheet-overlay').style.display='none';$('sheet').style.display='none';}
+function receiptForm(kind){
+  const isIn=kind==='receipt';
+  return '<h3>'+(isIn?'سند قبض جديد':'سند صرف جديد')+'</h3>'+
+  '<label class="f-label">'+(isIn?'العميل':'المورد / الطرف')+'</label>'+
+  '<select class="f-select" id="f-party">'+(isIn?partyOptions('customer'):partyOptions('supplier')+partyOptions('customer'))+'</select>'+
+  '<div class="f-grid2"><div><label class="f-label">المبلغ</label>'+
+  '<input class="f-input num" id="f-amount" type="number" inputmode="decimal" min="0" step="any" placeholder="0"></div>'+
+  '<div><label class="f-label">طريقة الدفع</label>'+
+  '<select class="f-select" id="f-method">'+
+  '<option value="cash">كاش</option><option value="card">شبكة</option><option value="transfer">تحويل بنكي</option>'+
+  '<option value="vcash">فودافون كاش</option><option value="cheque">شيك</option></select></div></div>'+
+  '<div id="f-due-wrap" style="display:none"><label class="f-label">تاريخ استحقاق الشيك</label>'+
+  '<input class="f-input num" id="f-due" type="date"></div>'+
+  '<div class="f-grid2"><div><label class="f-label">التاريخ</label>'+
+  '<input class="f-input num" id="f-date" type="date" value="'+new Date().toISOString().slice(0,10)+'"></div>'+
+  '<div><label class="f-label">ملاحظات</label><input class="f-input" id="f-notes" placeholder="اختياري"></div></div>'+
+  '<div class="f-err" id="f-err"></div>'+
+  '<button class="primary" onclick="submitReceipt(\''+kind+'\')">حفظ '+(isIn?'القبض':'الصرف')+'</button>';
+}
+async function submitReceipt(kind){
+  const err=$('f-err');err.textContent='';
+  const cid=$('f-party').value, amt=parseFloat($('f-amount').value)||0;
+  if(!cid){err.textContent='اختر الطرف أولاً';return;}
+  if(amt<=0){err.textContent='اكتب مبلغ صحيح';return;}
+  const m=$('f-method').value;
+  const body={customer_id:Number(cid),direction:kind==='receipt'?'in':'out',date:$('f-date').value,notes:$('f-notes').value};
+  body[m]=amt;
+  if(m==='cheque'){body.cheque_due=$('f-due').value;}
+  try{
+    await apiPost('/api/payments',body);
+    closeSheet();toast('تم الحفظ');load(false);
+  }catch(e){err.textContent=e.message;}
+}
+function invoiceForm(){
+  return '<h3>فاتورة بيع جديدة</h3>'+
+  '<label class="f-label">العميل</label><select class="f-select" id="f-party">'+partyOptions('customer')+'</select>'+
+  '<label class="f-label">الأصناف</label><div id="f-items"></div>'+
+  '<button class="add-line" onclick="addItemRow()">+ إضافة صنف</button>'+
+  '<div class="f-grid2"><div><label class="f-label">الخصم</label>'+
+  '<input class="f-input num" id="f-discount" type="number" inputmode="decimal" min="0" step="any" placeholder="0"></div>'+
+  '<div><label class="f-label">التاريخ</label>'+
+  '<input class="f-input num" id="f-date" type="date" value="'+new Date().toISOString().slice(0,10)+'"></div></div>'+
+  '<label class="f-label">ملاحظات</label><input class="f-input" id="f-notes" placeholder="اختياري">'+
+  '<div class="f-err" id="f-err"></div>'+
+  '<button class="primary" onclick="submitInvoice()">حفظ الفاتورة</button>';
+}
+function addItemRow(){
+  const d=document.createElement('div');d.className='item-row';
+  d.innerHTML='<input class="f-input" list="item-names" placeholder="اسم الصنف">'+
+    '<input class="f-input num" type="number" inputmode="decimal" min="0" step="any" placeholder="أزواج">'+
+    '<input class="f-input num" type="number" inputmode="decimal" min="0" step="any" placeholder="سعر">'+
+    '<button class="del" onclick="this.parentNode.remove()">×</button>';
+  $('f-items').appendChild(d);
+}
+async function submitInvoice(){
+  const err=$('f-err');err.textContent='';
+  const cid=$('f-party').value;
+  if(!cid){err.textContent='اختر العميل أولاً';return;}
+  const items=[];
+  document.querySelectorAll('#f-items .item-row').forEach(r=>{
+    const ins=r.querySelectorAll('input');
+    const name=ins[0].value.trim();
+    if(name){items.push({item_name:name,pairs:parseFloat(ins[1].value)||0,price:parseFloat(ins[2].value)||0});}
+  });
+  if(!items.length){err.textContent='أضف صنف واحد على الأقل';return;}
+  try{
+    const j=await apiPost('/api/invoices',{customer_id:Number(cid),kind:'sale',date:$('f-date').value,
+      discount:parseFloat($('f-discount').value)||0,notes:$('f-notes').value,items:items});
+    closeSheet();toast('فاتورة '+j.number+' اتسجلت');load(false);
+  }catch(e){err.textContent=e.message;}
+}
+
 /* ---------- load ---------- */
 async function load(manual){
   try{
@@ -365,12 +571,15 @@ async function load(manual){
       api('/api/invoices')]);
     $('co-name').textContent=boot.company_name||'NIXT FOR LEATHER';
     $('co-ver').textContent='إصدار '+boot.version;
+    if(boot.quick_add){$('quick-add').style.display='';$('badge-view').style.display='none';}
     DATA={dash,customers:custs,suppliers:supps,invoices:invs};
+    loadToday();
     renderKpis();renderBars();renderTop();renderRecent();renderParties();renderInvoices();
     showApp();
     const qp=new URLSearchParams(location.search);
     if(qp.get('inv')){openInvoice(Number(qp.get('inv')));}
     else if(qp.get('s')){showScr('scr-'+qp.get('s'));}
+    if(qp.get('sheet')&&boot.quick_add){openSheet(qp.get('sheet'));}
   }catch(e){
     if(e.message==='login')return;
     if(manual){alert('تعذر التحديث: '+e.message);}else showOffline();
