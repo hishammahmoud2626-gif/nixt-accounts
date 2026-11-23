@@ -38,7 +38,7 @@ try:
 except Exception:
     drive_sync = None
 
-APP_VERSION = "2.9.5"
+APP_VERSION = "2.9.6"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -313,6 +313,7 @@ CREATE TABLE IF NOT EXISTS cheque_events (
 
 # columns added after 1.0.0: (table, column, ddl)
 MIGRATIONS = [
+    ("invoice_items", "leather_packs", "ALTER TABLE invoice_items ADD COLUMN leather_packs TEXT DEFAULT '[]'"),
     ("invoices", "stock_posted", "ALTER TABLE invoices ADD COLUMN stock_posted INTEGER DEFAULT 0"),
     ("invoice_items", "material_type", "ALTER TABLE invoice_items ADD COLUMN material_type TEXT DEFAULT ''"),
     ("invoice_items", "unit", "ALTER TABLE invoice_items ADD COLUMN unit TEXT DEFAULT 'pair'"),
@@ -1481,6 +1482,27 @@ def validate_material_item(item):
         raise ValueError("اختار نوع الخامة لكل سطر شراء")
     if not str(item.get("item_name") or "").strip():
         raise ValueError("اكتب اسم الخامة")
+    packs=item.get("leather_packs") or []
+    if isinstance(packs,str):
+        try: packs=json.loads(packs)
+        except (ValueError,TypeError): raise ValueError("تفاصيل البواكي غير صحيحة")
+    if not isinstance(packs,list) or len(packs)>200:
+        raise ValueError("راجع تفاصيل البواكي")
+    if packs and kind != "leather":
+        raise ValueError("البواكي للجلد فقط")
+    normalized=[]
+    if sum(len(p.get("hides",[])) if isinstance(p,dict) and isinstance(p.get("hides"),list) else 0 for p in packs)>2000:
+        raise ValueError("الحد الأقصى 2000 جلدة في السطر. قسمها على سطور أكتر")
+    for pack in packs:
+        if not isinstance(pack,dict) or not isinstance(pack.get("hides"),list) or not 1<=len(pack["hides"])<=500:
+            raise ValueError("كل باكو لازم فيه جلدات بمساحات صحيحة")
+        hides=[float(x) for x in pack["hides"]]
+        if any(not math.isfinite(x) or x<=0 for x in hides):
+            raise ValueError("مساحة كل جلدة لازم رقم موجب")
+        normalized.append({"label":str(pack.get("label") or "").strip()[:100],"hides":hides})
+    item["leather_packs"]=normalized
+    if normalized:
+        item["pairs"]=round(sum(sum(x["hides"]) for x in normalized),6)
     q = float(item.get("pairs") or 0)
     price = float(item.get("price") or 0)
     if not math.isfinite(q) or q <= 0 or not math.isfinite(price) or price < 0:
@@ -2401,12 +2423,13 @@ class API:
                 price = float(it.get("price") or 0)
                 retail = None
             conn.execute(
-                "INSERT INTO invoice_items (invoice_id, item_name, color, pairs, price, retail_price, material_type, unit, size) VALUES (?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO invoice_items (invoice_id, item_name, color, pairs, price, retail_price, material_type, unit, size, leather_packs) VALUES (?,?,?,?,?,?,?,?,?,?)",
                 (iid, it["item_name"].strip(), it.get("color", ""),
                  float(it.get("pairs") or 0), price, retail,
                  (it.get("material_type") or "") if kind in ("purchase", "purchase_return") else "",
                  it.get("unit", "pair") if kind in ("purchase", "purchase_return") else "pair",
-                 str(it.get("size") or "") if kind in ("purchase", "purchase_return") and it.get("material_type") == "sole" else ""))
+                 str(it.get("size") or "") if kind in ("purchase", "purchase_return") and it.get("material_type") == "sole" else "",
+                 json.dumps(it.get("leather_packs") or [],ensure_ascii=False) if kind in ("purchase","purchase_return") else "[]"))
         if kind in ("purchase", "purchase_return"):
             for item in body["items"]:
                 quantity = float(item["pairs"]) * (1 if kind == "purchase" else -1)
@@ -4750,9 +4773,44 @@ def open_browser():
         return False
 
 
+def focus_existing_nixt_window():
+    """Reuse the visible app window left alive by a server update."""
+    if os.name != "nt":
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+        u=ctypes.WinDLL("user32",use_last_error=True)
+        cb=ctypes.WINFUNCTYPE(wintypes.BOOL,wintypes.HWND,wintypes.LPARAM)
+        u.EnumWindows.argtypes=[cb,wintypes.LPARAM]
+        u.GetWindowTextW.argtypes=[wintypes.HWND,wintypes.LPWSTR,ctypes.c_int]
+        u.GetClassNameW.argtypes=[wintypes.HWND,wintypes.LPWSTR,ctypes.c_int]
+        u.IsWindowVisible.argtypes=[wintypes.HWND]
+        u.IsWindowVisible.restype=wintypes.BOOL
+        u.ShowWindowAsync.argtypes=[wintypes.HWND,ctypes.c_int]
+        u.SetForegroundWindow.argtypes=[wintypes.HWND]
+        found=[]
+        @cb
+        def visit(hwnd,unused):
+            title=ctypes.create_unicode_buffer(512);klass=ctypes.create_unicode_buffer(128)
+            u.GetWindowTextW(hwnd,title,512);u.GetClassNameW(hwnd,klass,128)
+            expected="نيكست للحسابات - NIXT"
+            if u.IsWindowVisible(hwnd) and klass.value=="Chrome_WidgetWin_1" and (title.value==expected or title.value.startswith(expected+" - ")):
+                found.append(hwnd)
+            return True
+        u.EnumWindows(visit,0)
+        if not found:return False
+        u.ShowWindowAsync(found[0],3);u.SetForegroundWindow(found[0])
+        _nixt_log("reused existing Nixt window")
+        return True
+    except Exception:
+        return False
+
 def launch_ui():
     """Try the standalone window, then the default browser without leaking errors."""
     try:
+        if focus_existing_nixt_window():
+            return True
         if open_app_window() is not None:
             _nixt_log("window launched: app-window")
             return True
