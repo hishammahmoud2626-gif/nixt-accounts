@@ -448,10 +448,10 @@ async function openInvoice(id){
     $('d-title').innerHTML='<span class="tag '+KIND_TAG[i.kind]+'">'+KIND_LBL[i.kind]+'</span> <span class="num">'+esc(i.number||'')+'</span>';
     $('d-sub').innerHTML=esc((i.customer&&i.customer.name)||'')+' · <span class="num">'+esc(i.date||'')+'</span>';
     const rows=(i.items||[]).map(it=>'<tr><td>'+esc(it.item_name)+'</td><td>'+esc(it.color||'')+
-      '</td><td class="num">'+it.pairs+'</td><td class="num">'+(Number(it.price)||0).toLocaleString('en-US')+
-      '</td><td class="num">'+(it.pairs*it.price).toLocaleString('en-US')+'</td></tr>').join('');
+      '</td><td class="num">'+it.pairs+'</td><td class="num">'+(Number(it.retail_price!=null?it.retail_price:it.price)||0).toLocaleString('en-US')+
+      '</td><td class="num">'+(it.pairs*(it.retail_price!=null?it.retail_price:it.price)).toLocaleString('en-US')+'</td></tr>').join('');
     let h='<div class="panel" style="margin-top:0;overflow-x:auto"><table class="items"><thead><tr>'+
-      '<th>الصنف</th><th>اللون</th><th>الأزواج</th><th>السعر</th><th>الإجمالي</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+      '<th>الصنف</th><th>اللون</th><th>الأزواج</th><th>سعر المستهلك</th><th>الإجمالي</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
     h+='<div class="panel">';
     if(i.discount)h+='<div class="totrow"><span>الخصم</span><b>'+fmt(i.discount)+'</b></div>';
     h+='<div class="totrow"><span>الإجمالي الصافي</span><b>'+fmt(i.net)+'</b></div></div>';
@@ -635,7 +635,7 @@ function addItemRow(){
   const d=document.createElement('div');d.className='item-row';
   d.innerHTML='<input class="f-input" list="item-names" placeholder="اسم الصنف">'+
     '<input class="f-input num" type="number" inputmode="decimal" min="0" step="any" placeholder="أزواج">'+
-    '<input class="f-input num" type="number" inputmode="decimal" min="0" step="any" placeholder="سعر">'+
+    '<input class="f-input num" type="number" inputmode="decimal" min="0" step="any" placeholder="سعر المستهلك">'+
     '<button class="del" onclick="this.parentNode.remove()">×</button>';
   $('f-items').appendChild(d);
 }
@@ -647,7 +647,7 @@ async function submitInvoice(){
   document.querySelectorAll('#f-items .item-row').forEach(r=>{
     const ins=r.querySelectorAll('input');
     const name=ins[0].value.trim();
-    if(name){items.push({item_name:name,pairs:parseFloat(ins[1].value)||0,price:parseFloat(ins[2].value)||0});}
+    if(name){items.push({item_name:name,pairs:parseFloat(ins[1].value)||0,retail_price:parseFloat(ins[2].value)||0});}
   });
   if(!items.length){err.textContent='أضف صنف واحد على الأقل';return;}
   try{
