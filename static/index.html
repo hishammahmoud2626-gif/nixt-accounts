@@ -3,9 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="icon" href="/static/favicon.png">
+<link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48">
+<link rel="icon" type="image/png" href="/static/favicon.png" sizes="64x64">
+<link rel="icon" type="image/png" href="/static/icon-192.png" sizes="192x192">
+<link rel="apple-touch-icon" href="/static/icon-192.png">
 <script>document.documentElement.dataset.theme = localStorage.getItem('nixt-theme') || 'light';</script>
-<title>نيكست للحسابات</title>
+<title>نيكست للحسابات - NIXT</title>
 <style>
   @font-face{font-family:'Cairo';font-style:normal;font-weight:100 1000;font-display:swap;
     src:url('/static/fonts/cairo-latin.woff2') format('woff2');
@@ -346,6 +349,12 @@
 </style>
 </head>
 <body>
+<div id="splash" style="position:fixed;inset:0;z-index:9999;background:#17120d;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;transition:opacity .35s ease">
+  <img src="/static/logo-white.png" alt="NIXT" style="max-width:210px">
+  <div style="color:#c9b48f;font-size:16px">نظام نيكست للحسابات</div>
+  <div style="width:26px;height:26px;border:3px solid #3a2c1c;border-top-color:#d97706;border-radius:50%;animation:nixtspin .9s linear infinite"></div>
+</div>
+<style>@keyframes nixtspin{to{transform:rotate(360deg)}}</style>
 <svg xmlns="http://www.w3.org/2000/svg" style="display:none">
 <symbol id="ic-banknote" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="12" x="2" y="6" rx="2" />
   <circle cx="12" cy="12" r="2" />
@@ -1562,7 +1571,15 @@ function showLogin(){
     document.getElementById('subnav-'+x).classList.add('hidden');
 }
 function roleLabel(r){ return r==='admin'?'مدير':r==='accountant'?'محاسب':r==='warehouse'?'مخزن':'مستخدم'; }
+function hideSplash(){
+  const s=document.getElementById('splash');
+  if(!s) return;
+  s.style.opacity='0';
+  setTimeout(()=>{ if(s.parentNode) s.parentNode.removeChild(s); }, 400);
+}
+setTimeout(hideSplash, 9000);
 function showApp(){
+  hideSplash();
   document.getElementById('login-screen').style.display='none';
   document.getElementById('app-header').classList.remove('hidden');
   document.getElementById('sidebar').classList.remove('hidden');
@@ -1684,10 +1701,12 @@ async function bootAuth(){
   document.getElementById('login-ver').textContent='إصدار '+me.version;
   if(me.locked_by){ showLockBanner(me.locked_by, me.locked_ts); } else { hideLockBanner(); }
   if(me.needs_setup){
+    hideSplash();
     document.getElementById('setup-form').classList.remove('hidden');
     return;
   }
   if(!me.logged_in){
+    hideSplash();
     document.getElementById('login-form').classList.remove('hidden');
     loadLoginUsers();
     return;
