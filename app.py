@@ -38,7 +38,7 @@ try:
 except Exception:
     drive_sync = None
 
-APP_VERSION = "2.10.0"
+APP_VERSION = "2.11.0"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -475,10 +475,14 @@ def migrate_legacy_data():
 MIGRATED_FROM = migrate_legacy_data()
 
 
+import production
+PRODUCTION = production.Workflow(get_db, now_str)
+
 def init_db():
     os.makedirs(DATA_DIR, exist_ok=True)
     os.makedirs(BACKUP_DIR, exist_ok=True)
     conn = get_db()
+    production.migrate(conn, DB_PATH)
     conn.executescript(SCHEMA)
     for table, col, ddl in MIGRATIONS:
         cols = [r["name"] for r in conn.execute("PRAGMA table_info(%s)" % table)]
@@ -1123,15 +1127,22 @@ def merge_remote_db(remote_path, remote_device=""):
     Identity is the record uuid; the newer updated_at wins; deletions win via
     tombstones. A safety backup is always taken first."""
     check=get_db()
+    has_production=check.execute("SELECT 1 FROM production_orders LIMIT 1").fetchone()
     has_stock=check.execute("SELECT 1 FROM stock_movements LIMIT 1").fetchone()
     check.close()
     remote=sqlite3.connect(remote_path)
+    try:
+        remote_production=remote.execute("SELECT COUNT(*) FROM production_orders").fetchone()[0]
+    except sqlite3.Error:
+        remote_production=0
     try:
         remote_stock=remote.execute("SELECT COUNT(*) FROM stock_movements").fetchone()[0]
     except sqlite3.Error:
         remote_stock=0
     finally:
         remote.close()
+    if has_production or remote_production:
+        raise RuntimeError("دمج جهازين غير متاح مع طلبيات الإنتاج. استخدم جهاز واحد أو استعادة نسخة كاملة بعد المراجعة")
     if has_stock or remote_stock:
         raise RuntimeError("دمج جهازين غير متاح مع سجل المخزن. استخدم جهاز واحد أو استعادة نسخة كاملة بعد المراجعة")
     do_backup()
@@ -1510,8 +1521,8 @@ def validate_material_item(item):
     item["unit"] = "sqft" if kind == "leather" else "pair" if kind == "sole" else str(item.get("unit") or "").strip()
     if not item["unit"]:
         raise ValueError("اكتب وحدة الخامة")
-    if kind == "sole" and (not str(item.get("size") or "").strip() or not str(item.get("color") or "").strip() or not q.is_integer()):
-        raise ValueError("النعل لازم مقاس ولون وعدد أزواج صحيح")
+    if kind == "sole" and (not str(item.get("color") or "").strip() or not q.is_integer()):
+        raise ValueError("النعل لازم لون وعدد أزواج صحيح، والمقاس ممكن يفضل غير محدد")
     if kind != "sole":
         item["size"] = ""
     return q
@@ -2401,6 +2412,11 @@ class API:
         idate = body.get("date") or datetime.now().strftime("%Y-%m-%d")
         conn = get_db()
         conn.execute("BEGIN IMMEDIATE")
+        try:
+            production_selection = PRODUCTION.validate_invoice(conn,body,user)
+        except (ValueError,TypeError) as e:
+            conn.rollback();conn.close()
+            return 400,{"error":str(e)}
         if kind == "purchase_return":
             needed = {}
             for item in body["items"]:
@@ -2495,6 +2511,7 @@ class API:
                 quantity = float(item["pairs"]) * (1 if kind == "purchase" else -1)
                 stock_post(conn,item,quantity,kind,idate,body.get("reason") or number,user,invoice_id=iid)
             conn.execute("UPDATE invoices SET stock_posted=1 WHERE id=?",(iid,))
+        PRODUCTION.link_invoice(conn,iid,production_selection,user)
         net0 = invoice_net(iid, conn)
         log_action(conn, user, "فاتورة جديدة" if kind in ("sale", "purchase") else "مرتجع جديد",
                    "رقم %s - صافي %s" % (number, round(net0, 2)))
@@ -2570,6 +2587,11 @@ class API:
         if inv and inv["stock_posted"]:
             conn.close()
             return 400,{"error":"الفاتورة مرتبطة بحركات مخزن، صححها بمرتجع مرتبط للحفاظ على السجل"}
+        conn.execute("BEGIN IMMEDIATE")
+        linked=conn.execute("SELECT COUNT(*) FROM production_invoice_links WHERE invoice_id=?",(iid,)).fetchone()[0]
+        if linked:
+            PRODUCTION.hist(conn,user or {},'حذف فاتورة إنتاج',str(iid))
+            conn.execute("DELETE FROM production_invoice_links WHERE invoice_id=?",(iid,))
         conn.execute("DELETE FROM invoice_items WHERE invoice_id=?", (iid,))
         conn.execute("DELETE FROM invoices WHERE id=?", (iid,))
         note = (inv["number"] or ("#%d" % iid)) if inv else ("#%d" % iid)
@@ -3011,7 +3033,8 @@ class API:
                     raise RuntimeError("فشل حفظ نسخة أمان قبل إعادة التشغيل")
                 env = dict(os.environ)
                 env.update(NIXT_STAGING=staging,NIXT_OLD=old_dir,NIXT_START=new_start,
-                           NIXT_LOG=log_path,NIXT_UPDIR=UPDATES_DIR,NIXT_PID=str(os.getpid()))
+                           NIXT_LOG=log_path,NIXT_UPDIR=UPDATES_DIR,NIXT_PID=str(os.getpid()),
+                           NIXT_FROM_VERSION=APP_VERSION,NIXT_TO_VERSION=latest,NIXT_PORT=str(PORT))
                 subprocess.Popen(["cmd.exe","/d","/c",bat],cwd=os.environ.get("TEMP") or BASE_DIR,
                                  env=env,creationflags=getattr(subprocess,"CREATE_NEW_CONSOLE",0))
                 _nixt_log("update: Windows handoff process started; exiting app")
@@ -3793,6 +3816,15 @@ class API:
         conn.close()
         return 200, {"id": iid}
 
+    def list_colors(q, user):
+        conn=get_db()
+        colors=set(get_setting(conn,'colors','').split(','))
+        for table in ('invoice_items','stock_movements','production_lines'):
+            for row in conn.execute('SELECT DISTINCT color FROM '+table):
+                if row['color']:colors.add(row['color'])
+        conn.close()
+        return 200,sorted(x.strip() for x in colors if x.strip())
+
     def list_item_names(q, user):
         conn = get_db()
         names = set()
@@ -3805,6 +3837,9 @@ class API:
         for r in conn.execute("SELECT name FROM items WHERE active=1"):
             if r["name"]:
                 names.add(r["name"])
+        for table in ('production_lines','stock_movements'):
+            for r in conn.execute('SELECT DISTINCT item_name FROM '+table):
+                if r['item_name']:names.add(r['item_name'])
         conn.close()
         return 200, sorted(names)
 
@@ -4261,6 +4296,7 @@ def drive_callback_html(q):
 # ---------------- routes ----------------
 # path -> (handler, needs_admin)
 ROUTES_POST = {
+    "/api/production": (PRODUCTION.action,False),
     "/api/stock/move": (lambda b,u: API.stock_move(b,u),False),
     "/api/setup": (lambda b, u: API.setup(b, u), False),
     "/api/login": (lambda b, u: API.login(b, u), False),
@@ -4300,6 +4336,7 @@ ROUTES_POST = {
     "/api/mobile/lock": (lambda b, u: API.mobile_lock(b, u), False),
 }
 ROUTES_GET = {
+    "/api/production": (PRODUCTION.list,False),
     "/api/notifications": (API.notifications,False),
     "/api/stock": (API.stock_list,False),
     "/api/backup-status": (lambda q,u: (200,dict(BACKUP_STATUS,cloud=dict(CLOUD_BACKUP_STATUS))),False),
@@ -4322,6 +4359,7 @@ ROUTES_GET = {
     "/api/activity": (API.list_activity, True),
     "/api/prices": (API.list_prices, False),
     "/api/item-names": (API.list_item_names, False),
+    "/api/colors": (API.list_colors, False),
     "/api/top-items": (API.top_items, False),
     "/api/item-monthly": (API.item_monthly, False),
     "/api/today": (API.today, False),
@@ -4680,36 +4718,49 @@ def port_busy():
 
 
 def build_update_bat(old_dir):
-    """Write the apply-update bat next to the program and return its path.
-    All dynamic values travel via environment variables (%NIXT_*%): the bat
-    body stays pure ASCII/literal, and nothing here may use Python % string
-    formatting (a literal %VAR% in the template crashes formatting - this
-    exact bug broke 2.7.0's updater)."""
+    """ASCII helper, all paths and versions travel via the environment.
+    A successful robocopy often returns 1. START does not reliably clear
+    that errorlevel, so reset it and verify the HTTP version explicitly.
+    Keep the helper and staged files on failure for diagnosis.
+    """
     bat = os.path.join(old_dir, "nixt-apply-update.bat")
-    kill = 'taskkill /F /PID %NIXT_PID% >>"%NIXT_LOG%" 2>&1'
     bat_lines = [
         '@echo off',
+        'setlocal EnableExtensions DisableDelayedExpansion',
         'title Nixt Update',
         'cd /d "%TEMP%"',
-        'echo === update start %date% %time% ===>>"%NIXT_LOG%"',
+        'echo === update %NIXT_FROM_VERSION% to %NIXT_TO_VERSION% %date% %time% ===>>"%NIXT_LOG%"',
+        'set "NIXT_STEP=waiting for app to close"',
         'echo Waiting for the app to close...',
         'ping -n 4 127.0.0.1 >nul',
-        kill,
+        'taskkill /F /PID %NIXT_PID% >>"%NIXT_LOG%" 2>&1',
         'ping -n 2 127.0.0.1 >nul',
+        'set "NIXT_STEP=copying program files"',
         'echo Copying new files...',
-        'robocopy "%NIXT_STAGING%" "%NIXT_OLD%" /E /IS /NFL /NDL /NJH /R:2 /W:1 >>"%NIXT_LOG%" 2>&1',
-        'if errorlevel 8 goto failed',
+        'robocopy "%NIXT_STAGING%" "%NIXT_OLD%" /E /IS /NFL /NDL /NJH /R:5 /W:2 >>"%NIXT_LOG%" 2>&1',
+        'set "NIXT_COPY_RC=%errorlevel%"',
+        'echo Copy exit code: %NIXT_COPY_RC%>>"%NIXT_LOG%"',
+        'if %NIXT_COPY_RC% GEQ 8 goto failed',
+        'set "NIXT_STEP=starting updated app"',
         'echo Restarting...',
+        'cmd /c exit /b 0',
         'start "" /D "%NIXT_OLD%" "%NIXT_OLD%\\python\\pythonw.exe" "%NIXT_OLD%\\app.py"',
         'if errorlevel 1 goto failed',
-        'ping -n 3 127.0.0.1 >nul',
+        'set "NIXT_STEP=checking running version"',
+        'echo Checking updated version...',
+        "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"$ProgressPreference='SilentlyContinue'; for($i=0;$i -lt 45;$i++){try{$v=Invoke-RestMethod -Uri ('http://127.0.0.1:'+$env:NIXT_PORT+'/api/version') -TimeoutSec 2; if($v.version -eq $env:NIXT_TO_VERSION){Write-Output ('Verified running version: '+$v.version);exit 0};Write-Output ('Waiting, current version: '+$v.version)}catch{};Start-Sleep -Seconds 1};exit 1\" >>\"%NIXT_LOG%\" 2>&1",
+        'if errorlevel 1 goto failed',
+        'echo === update verified %date% %time% ===>>"%NIXT_LOG%"',
+        'echo Update completed successfully.',
         'rmdir /s /q "%NIXT_STAGING%" >>"%NIXT_LOG%" 2>&1',
-        'rmdir /s /q "%NIXT_UPDIR%" >>"%NIXT_LOG%" 2>&1',
-        'echo === update done %date% %time% ===>>"%NIXT_LOG%"',
-        '(goto) 2>nul & del "%~f0"',
+        'exit /b 0',
         ':failed',
-        'echo Update failed. Files preserved for recovery.>>"%NIXT_LOG%"',
-        'echo Update failed. Run the latest NixtSetup installer. See update-log.txt in your Nixt data folder.',
+        'echo Update not verified at: %NIXT_STEP%>>"%NIXT_LOG%"',
+        'echo Update could not be confirmed at: %NIXT_STEP%',
+        'echo If Nixt is open, check its version before reinstalling.',
+        'echo Your data was not removed. Close all Nixt windows, then run the latest NixtSetup if needed.',
+        'echo Log: "%NIXT_LOG%"',
+        'start "" notepad.exe "%NIXT_LOG%"',
         'pause',
         'exit /b 1',
     ]
