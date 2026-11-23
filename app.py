@@ -36,7 +36,7 @@ try:
 except Exception:
     drive_sync = None
 
-APP_VERSION = "2.6.0"
+APP_VERSION = "2.7.0"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -294,6 +294,7 @@ MIGRATIONS = [
     ("payments", "cheque", "ALTER TABLE payments ADD COLUMN cheque REAL DEFAULT 0"),
     ("invoices", "reason", "ALTER TABLE invoices ADD COLUMN reason TEXT DEFAULT ''"),
     ("invoices", "number", "ALTER TABLE invoices ADD COLUMN number TEXT DEFAULT ''"),
+    ("invoice_items", "retail_price", "ALTER TABLE invoice_items ADD COLUMN retail_price REAL"),
     ("items", "cost", "ALTER TABLE items ADD COLUMN cost REAL DEFAULT 0"),
     ("cheques", "endorsed_to", "ALTER TABLE cheques ADD COLUMN endorsed_to INTEGER"),
     ("cheques", "endorsed_date", "ALTER TABLE cheques ADD COLUMN endorsed_date TEXT DEFAULT ''"),
@@ -490,8 +491,9 @@ def lan_ips():
         for _fam, _typ, _pr, _cn, addr in socket.getaddrinfo(
                 socket.gethostname(), None, socket.AF_INET):
             ip = addr[0]
-            if not ip.startswith("127.") and ip not in ips:
-                ips.append(ip)
+            if ip.startswith("127.") or ip.startswith("169.254.") or ip in ips:
+                continue
+            ips.append(ip)
     except Exception:
         pass
     if not ips:
@@ -500,10 +502,27 @@ def lan_ips():
             s.connect(("8.8.8.8", 80))
             ip = s.getsockname()[0]
             s.close()
-            if ip and not ip.startswith("127."):
+            if ip and not ip.startswith("127.") and not ip.startswith("169.254."):
                 ips.append(ip)
         except Exception:
             pass
+
+    def _rank(ip):
+        if is_tailscale_ip(ip):
+            return 2
+        if ip.startswith("192.168."):
+            return 0
+        if ip.startswith("10."):
+            return 1
+        if ip.startswith("172."):
+            try:
+                if 16 <= int(ip.split(".")[1]) <= 31:
+                    return 1
+            except (IndexError, ValueError):
+                pass
+        return 3
+
+    ips.sort(key=_rank)
     return ips
 
 
@@ -517,8 +536,14 @@ def is_tailscale_ip(ip):
 
 def mobile_urls(key):
     out = []
+    recommended_set = False
     for ip in lan_ips():
-        out.append({"ip": ip, "tailscale": is_tailscale_ip(ip),
+        ts = is_tailscale_ip(ip)
+        rec = False
+        if not ts and not recommended_set:
+            rec = True
+            recommended_set = True
+        out.append({"ip": ip, "tailscale": ts, "recommended": rec,
                     "url": "http://%s:%d/m?k=%s" % (ip, PORT, key)})
     return out
 
@@ -647,6 +672,18 @@ def log_action(conn, user, action, details=""):
                      (now_str(), (user or {}).get("username", ""), action, details))
     except sqlite3.Error:
         pass
+
+
+def next_party_code(conn, kind):
+    prefix = "C" if kind == "customer" else "P"
+    best = 0
+    for r in conn.execute("SELECT code FROM customers WHERE kind=? AND code LIKE ?",
+                          (kind, prefix + "-%")):
+        try:
+            best = max(best, int(str(r["code"] or "").split("-", 1)[1]))
+        except (IndexError, ValueError):
+            pass
+    return "%s-%04d" % (prefix, best + 1)
 
 
 def party_balance(conn, pid):
@@ -1818,6 +1855,15 @@ class API:
         return (200 if ok else 500), {"ok": ok, "status": drive_sync.status()}
 
     # ---------- parties (customers & suppliers) ----------
+    def party_next_code(q, user):
+        kind = q.get("kind", ["customer"])[0]
+        if kind not in ("customer", "supplier"):
+            kind = "customer"
+        conn = get_db()
+        code = next_party_code(conn, kind)
+        conn.close()
+        return 200, {"code": code}
+
     def list_customers(q, user):
         kind = q.get("kind", [""])[0]
         conn = get_db()
@@ -1839,12 +1885,13 @@ class API:
             return 400, {"error": "الاسم مطلوب"}
         kind = body.get("kind") if body.get("kind") in ("customer", "supplier") else "customer"
         conn = get_db()
+        code = (body.get("code") or "").strip() or next_party_code(conn, kind)
         cur = conn.execute(
             "INSERT INTO customers (name, phone, group_name, discount_pct, notes, kind, code, address,"
             " credit_limit, opening, opening_date, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             (name, body.get("phone", ""), body.get("group_name", ""),
              float(body.get("discount_pct") or 0), body.get("notes", ""), kind,
-             body.get("code", ""), body.get("address", ""),
+             code, body.get("address", ""),
              float(body.get("credit_limit") or 0), float(body.get("opening") or 0),
              body.get("opening_date", ""), now_str()))
         log_action(conn, user, "طرف جديد",
@@ -1985,13 +2032,35 @@ class API:
                 conn.execute("UPDATE invoices SET reason=? WHERE id=?", (body.get("reason", ""), iid))
             if body.get("return_of"):
                 conn.execute("UPDATE invoices SET return_of=? WHERE id=?", (int(body["return_of"]), iid))
+        # 2.7.0: for customer sales/returns the typed price is the retail (consumer)
+        # price; wholesale-after-discount is derived server-side so desktop and
+        # mobile agree. Supplier invoices and old clients keep price as sent.
+        party_row = conn.execute("SELECT kind, discount_pct FROM customers WHERE id=?", (cid,)).fetchone()
+        is_customer_party = (party_row is None) or ((party_row["kind"] or "customer") == "customer")
+        retail_mode = kind in ("sale", "return") and is_customer_party
+        try:
+            divisor = float(get_setting(conn, "wholesale_divisor", "1.22") or 1.22) or 1.22
+        except (TypeError, ValueError):
+            divisor = 1.22
+        cust_disc_pct = float(party_row["discount_pct"] or 0) if (retail_mode and party_row) else 0.0
         for it in body.get("items", []):
             if not (it.get("item_name") or "").strip():
                 continue
+            rv = it.get("retail_price")
+            try:
+                rv = float(rv) if rv not in (None, "") else None
+            except (TypeError, ValueError):
+                rv = None
+            if retail_mode and rv and rv > 0:
+                price = round(rv / divisor * (1 - cust_disc_pct / 100.0), 2)
+                retail = rv
+            else:
+                price = float(it.get("price") or 0)
+                retail = None
             conn.execute(
-                "INSERT INTO invoice_items (invoice_id, item_name, color, pairs, price) VALUES (?,?,?,?,?)",
+                "INSERT INTO invoice_items (invoice_id, item_name, color, pairs, price, retail_price) VALUES (?,?,?,?,?,?)",
                 (iid, it["item_name"].strip(), it.get("color", ""),
-                 float(it.get("pairs") or 0), float(it.get("price") or 0)))
+                 float(it.get("pairs") or 0), price, retail))
         net0 = invoice_net(iid, conn)
         log_action(conn, user, "فاتورة جديدة" if kind in ("sale", "purchase") else "مرتجع جديد",
                    "رقم %s - صافي %s" % (number, round(net0, 2)))
@@ -2009,8 +2078,9 @@ class API:
         inv = dict(inv)
         inv["items"] = rows(conn.execute("SELECT * FROM invoice_items WHERE invoice_id=?", (iid,)))
         for it in inv["items"]:
-            r = conn.execute("SELECT retail_price FROM items WHERE name=?", (it["item_name"],)).fetchone()
-            it["retail_price"] = r["retail_price"] if r else None
+            if it.get("retail_price") is None:
+                r = conn.execute("SELECT retail_price FROM items WHERE name=?", (it["item_name"],)).fetchone()
+                it["retail_price"] = r["retail_price"] if r else None
         inv["items_total"] = round(sum(i["pairs"] * i["price"] for i in inv["items"]), 2)
         inv["net"] = round(invoice_net(iid, conn), 2)
         cust = conn.execute("SELECT * FROM customers WHERE id=?", (inv["customer_id"],)).fetchone()
@@ -2020,6 +2090,45 @@ class API:
         inv["company"] = st
         conn.close()
         return 200, inv
+
+    def reprice_invoice_retail(iid, body, user):
+        """One-click fix for invoices saved when the typed price was treated as
+        wholesale: reinterpret each line price as the retail (consumer) price and
+        derive wholesale = retail / divisor * (1 - customer discount). Balances are
+        computed live, so they update automatically. Refuses already-fixed invoices."""
+        conn = get_db()
+        inv = conn.execute("SELECT * FROM invoices WHERE id=?", (iid,)).fetchone()
+        if not inv:
+            conn.close()
+            return 404, {"error": "الفاتورة مش موجودة"}
+        cust = conn.execute("SELECT * FROM customers WHERE id=?", (inv["customer_id"],)).fetchone()
+        if not cust or (cust["kind"] or "customer") != "customer" or inv["kind"] not in ("sale", "return"):
+            conn.close()
+            return 400, {"error": "التصحيح ده للفواتير والمرتجعات بتاعة العملاء بس"}
+        items = rows(conn.execute("SELECT * FROM invoice_items WHERE invoice_id=?", (iid,)))
+        if not items:
+            conn.close()
+            return 400, {"error": "الفاتورة مفيهاش أصناف"}
+        if any(it["retail_price"] is not None for it in items):
+            conn.close()
+            return 400, {"error": "الفاتورة دي متسجلة أصلاً بسعر المستهلك - مش محتاجة تصحيح"}
+        try:
+            divisor = float(get_setting(conn, "wholesale_divisor", "1.22") or 1.22) or 1.22
+        except (TypeError, ValueError):
+            divisor = 1.22
+        disc = float(cust["discount_pct"] or 0)
+        old_net = invoice_net(iid, conn)
+        for it in items:
+            retail = float(it["price"] or 0)
+            newp = round(retail / divisor * (1 - disc / 100.0), 2)
+            conn.execute("UPDATE invoice_items SET retail_price=?, price=? WHERE id=?",
+                         (retail, newp, it["id"]))
+        new_net = invoice_net(iid, conn)
+        log_action(conn, user, "تصحيح تفسير سعر فاتورة",
+                   "رقم %s - الصافي من %s لـ %s" % (inv["number"] or iid, round(old_net, 2), round(new_net, 2)))
+        conn.commit()
+        conn.close()
+        return 200, {"old_net": round(old_net, 2), "new_net": round(new_net, 2)}
 
     def delete_invoice(iid, user=None, approver=""):
         conn = get_db()
@@ -2401,33 +2510,61 @@ class API:
                     shutil.copyfileobj(srcf, outf)
         # handoff: stop this server, copy the new files over THIS folder
         # (the launch path never changes, so shortcuts keep working), restart.
+        # Paths travel via environment variables so the bat itself stays pure
+        # ASCII - Arabic/space paths in a .bat get mangled by cmd's codepage
+        # (root cause of the silent 2.5.0->2.6.0 failure).
         old_dir = BASE_DIR.rstrip(os.sep)
         bat = os.path.join(old_dir, "nixt-apply-update.bat")
         new_start = os.path.join(old_dir, "START.bat")
+        log_path = os.path.join(os.path.dirname(DATA_DIR), "update-log.txt")
         bat_lines = [
             '@echo off',
+            'title Nixt Update',
             'cd /d "%TEMP%"',
-            'ping -n 5 127.0.0.1 >nul',
-            'taskkill /F /IM pythonw.exe >nul 2>&1',
+            'echo === update start %date% %time% ===>>"%NIXT_LOG%"',
+            'echo Waiting for the app to close...',
+            'ping -n 4 127.0.0.1 >nul',
+            # kill whatever still listens on the app port (the old server)
+            'for /f "tokens=5" %%a in (\'netstat -ano ^| findstr /C:":%d " ^| findstr /C:"LISTENING"\') do taskkill /F /PID %%a >>"%NIXT_LOG%" 2>&1' % PORT,
             'ping -n 2 127.0.0.1 >nul',
-            'xcopy /E /Y /Q "%s\\*" "%s\\" >nul' % (staging, old_dir),
-            'start "" "%s"' % new_start,
+            'echo Copying new files...',
+            'robocopy "%NIXT_STAGING%" "%NIXT_OLD%" /E /IS /NFL /NDL /NJH /R:2 /W:1 >>"%NIXT_LOG%" 2>&1',
+            'echo Restarting...',
+            'start "" "%NIXT_START%"',
             'ping -n 3 127.0.0.1 >nul',
-            'rmdir /s /q "%s" >nul 2>&1' % UPDATES_DIR,
-            'del "%~f0" >nul 2>&1',
+            'rmdir /s /q "%NIXT_STAGING%" >>"%NIXT_LOG%" 2>&1',
+            'rmdir /s /q "%NIXT_UPDIR%" >>"%NIXT_LOG%" 2>&1',
+            'echo === update done %date% %time% ===>>"%NIXT_LOG%"',
+            '(goto) 2>nul & del "%~f0"',
         ]
         with open(bat, "w") as f:
             f.write("\r\n".join(bat_lines) + "\r\n")
 
         def _handoff():
             try:
-                subprocess.Popen(["cmd", "/c", bat], cwd=os.environ.get("TEMP", parent))
+                env = dict(os.environ)
+                env["NIXT_STAGING"] = staging
+                env["NIXT_OLD"] = old_dir
+                env["NIXT_START"] = new_start
+                env["NIXT_LOG"] = log_path
+                env["NIXT_UPDIR"] = UPDATES_DIR
+                subprocess.Popen(["cmd", "/c", "start", "Nixt Update", "cmd", "/c", '"%s"' % bat],
+                                 cwd=os.environ.get("TEMP") or BASE_DIR, env=env)
             except Exception:
                 pass
             os._exit(0)
 
         threading.Timer(1.0, _handoff).start()
         return 200, {"ok": True, "new_folder": BASE_DIR, "version": latest}
+
+    def update_log(q, user):
+        path = os.path.join(os.path.dirname(DATA_DIR), "update-log.txt")
+        try:
+            with io.open(path, encoding="utf-8", errors="replace") as f:
+                txt = f.read()[-6000:]
+        except OSError:
+            txt = ""
+        return 200, {"log": txt}
 
     def wipe(body, user):
         if (body.get("confirm") or "").strip() != "تصفير":
@@ -3680,6 +3817,8 @@ ROUTES_GET = {
     "/api/mobile/today-summary": (API.mobile_today_summary, False),
     "/api/item-last-price": (API.item_last_price, False),
     "/api/mobile/config": (API.mobile_config, True),
+    "/api/parties/next-code": (API.party_next_code, True),
+    "/api/update-log": (API.update_log, True),
     "/api/drive/status": (API.drive_status, True),
     "/api/backups": (API.list_backups, True),
     "/api/collections": (API.collections, False),
@@ -3916,6 +4055,8 @@ class Handler(BaseHTTPRequestHandler):
                 if adm and user["role"] != "admin":
                     return self._send(403, {"error": "admin_required"})
                 return self._send(*fn(body, user))
+            if path.startswith("/api/invoices/") and path.endswith("/reprice-retail"):
+                return self._send(*API.reprice_invoice_retail(int(path.split("/")[3]), body, user))
             if path.startswith("/api/employees/") and path.endswith("/toggle"):
                 return self._send(*API.toggle_employee(int(path.split("/")[3]), user))
             if path.startswith("/api/cheques/") and path.endswith("/status"):
